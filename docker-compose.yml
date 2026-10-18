@@ -1,0 +1,30 @@
+services:
+  # Data collector service running scripts/collect_data.py
+  collector:
+    build: .
+    image: aaata-bus:latest
+    # Specify the script and any parameters you wish to pass:
+    command:
+      [
+        "collect_data.py",
+        "--routes",
+        "22",
+        "63",
+        "65",
+        "--interval-minutes",
+        "5",
+      ]
+    volumes:
+      # Mount host ./dat to /app/dat so data persists across container restarts
+      - ./dat:/app/dat
+      # Optional: Mount ./scripts so changes to scripts don't require rebuilding the image
+      # - ./scripts:/app/scripts:ro
+    restart: unless-stopped
+
+  # Template/Example: Running another script in ./scripts
+  # worker:
+  #   build: .
+  #   image: aaata-bus:latest
+  #   command: ["my_other_script.py", "--param1", "value"]
+  #   volumes:
+  #     - ./dat:/app/dat

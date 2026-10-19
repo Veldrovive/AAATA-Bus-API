@@ -6,7 +6,12 @@ from aaata_bus.schema import (
     RouteData,
 )
 
-from aaata_bus.api import get_buses_for_route, get_predictions_for_bus
+from aaata_bus.api import (
+    get_buses_for_route,
+    get_predictions_for_bus,
+    get_buses_for_route_async,
+    get_predictions_for_bus_async,
+)
 
 from aaata_bus.definitions import *
 
@@ -23,5 +28,7 @@ __all__ = [
     "ensure_dat",
     "get_buses_for_route",
     "get_predictions_for_bus",
+    "get_buses_for_route_async",
+    "get_predictions_for_bus_async",
 ]
 

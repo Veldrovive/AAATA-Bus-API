@@ -2,16 +2,18 @@
 Periodically saves route data to a jsonl file.
 """
 import argparse
+import asyncio
 import random
 import time
 from datetime import datetime
 
+import httpx
+
 from aaata_bus import (
-    Bus,
     BusPrediction,
     RouteData,
-    get_buses_for_route,
-    get_predictions_for_bus,
+    get_buses_for_route_async,
+    get_predictions_for_bus_async,
     DATA_PATH,
     ensure_dat,
 )
@@ -23,23 +25,29 @@ COURTESY_WAIT_TIME_RANGE_S = (2, 5)
 
 route_data_path = DATA_PATH / "route_prediction_data.jsonl"
 
-def courtesy_wait():
+async def courtesy_wait():
     wait_time = random.uniform(COURTESY_WAIT_TIME_RANGE_S[0], COURTESY_WAIT_TIME_RANGE_S[1])
-    time.sleep(wait_time)
+    await asyncio.sleep(wait_time)
 
-def save_route_data(route_id: int, collect_predictions: bool):
-    busses = get_buses_for_route(str(route_id))
-    if busses is None:
-        return False
+async def save_route_data(client: httpx.AsyncClient, route_id: int, collect_predictions: bool):
+    kind = "bus + prediction" if collect_predictions else "bus"
+    try:
+        busses = await get_buses_for_route_async(client, str(route_id))
+        if busses is None:
+            print(f"Failed to save {kind} data for route {route_id}")
+            return
 
-    predictions: dict[str, list[BusPrediction]] = {}
-    if collect_predictions:
-        for bus in busses:
-            prediction = get_predictions_for_bus(bus.vehicle_id)
-            if prediction is not None:
-                predictions[bus.vehicle_id] = prediction
+        predictions: dict[str, list[BusPrediction]] = {}
+        if collect_predictions:
+            for bus in busses:
+                prediction = await get_predictions_for_bus_async(client, bus.vehicle_id)
+                if prediction is not None:
+                    predictions[bus.vehicle_id] = prediction
 
-            courtesy_wait()
+                await courtesy_wait()
+    except httpx.HTTPError as e:
+        print(f"Failed to save {kind} data for route {route_id}: {e!r}")
+        return
 
     route_data = RouteData(
         route_id=str(route_id),
@@ -50,9 +58,43 @@ def save_route_data(route_id: int, collect_predictions: bool):
 
     with open(route_data_path, "a") as f:
         f.write(route_data.model_dump_json() + "\n")
-    return True
-        
-    
+    print(f"Saved {kind} data for route {route_id} at {datetime.now()}")
+
+
+async def collect(routes: list[int], bus_interval_s: float, loops_per_prediction: int):
+    # Keep references to running tasks so they aren't garbage collected mid-flight
+    running_tasks: set[asyncio.Task] = set()
+    # Prediction collection can outlast a prediction interval; never run two at once for a route
+    prediction_tasks: dict[int, asyncio.Task] = {}
+    loop_count = 0
+
+    async with httpx.AsyncClient() as client:
+        while True:
+            loop_start = time.time()
+            collect_predictions = loop_count % loops_per_prediction == 0
+            loop_count += 1
+
+            kind = "bus + prediction" if collect_predictions else "bus"
+            print(f"Starting {kind} save for routes {routes} at {datetime.fromtimestamp(loop_start)}")
+
+            for route_id in routes:
+                route_collect_predictions = collect_predictions
+                previous = prediction_tasks.get(route_id)
+                if route_collect_predictions and previous is not None and not previous.done():
+                    print(f"Predictions for route {route_id} still in progress; saving bus data only")
+                    route_collect_predictions = False
+
+                task = asyncio.create_task(save_route_data(client, route_id, route_collect_predictions))
+                running_tasks.add(task)
+                task.add_done_callback(running_tasks.discard)
+                if route_collect_predictions:
+                    prediction_tasks[route_id] = task
+
+                await courtesy_wait()
+
+            await asyncio.sleep(max(0.0, loop_start + bus_interval_s - time.time()))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Periodically save AAATA bus route prediction data.")
     parser.add_argument(
@@ -91,29 +133,7 @@ def main():
 
     ensure_dat()
 
-    last_saved_time: float | None = None
-    loop_count = 0
-
-    while True:
-        current_time = time.time()
-        if last_saved_time is not None and current_time - last_saved_time < bus_interval_s:
-            time.sleep(1)
-            continue
-
-        last_saved_time = current_time
-        collect_predictions = loop_count % loops_per_prediction == 0
-        loop_count += 1
-
-        kind = "bus + prediction" if collect_predictions else "bus"
-        print(f"Saving {kind} data for routes {routes} at {datetime.fromtimestamp(current_time)}")
-
-        for route_id in routes:
-            if not save_route_data(route_id, collect_predictions):
-                print(f"Failed to save data for route {route_id}")
-
-            courtesy_wait()
-
-        print(f"Saved {kind} data for routes {routes} at {datetime.fromtimestamp(current_time)}")
+    asyncio.run(collect(routes, bus_interval_s, loops_per_prediction))
 
 if __name__ == "__main__":
     main()

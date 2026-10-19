@@ -28,17 +28,28 @@ Scripts that write data verify the target directory exists by calling `ensure_da
 mkdir -p dat
 ```
 
-Run with default settings (routes 22, 63, 65 every 5 minutes):
+Run with default settings (routes 22, 63, 65; bus locations every 30 seconds, predictions every 5 minutes):
 
 ```bash
 uv run scripts/collect_data.py
 ```
 
-Run with custom routes and polling interval:
+Run with custom routes and polling intervals. The prediction interval must be a whole multiple of the general interval; snapshots taken between prediction loops have empty `predictions` and `predictions_collected: false`:
 
 ```bash
-uv run scripts/collect_data.py --routes 22 63 --interval-minutes 10
+uv run scripts/collect_data.py --routes 22 63 --general-interval-minutes 1 --prediction-interval-minutes 10
 ```
+
+### Visualizations
+
+Visualization helpers live in `aaata_bus.visualization`. To map the path each route takes, as traced by its buses' collected positions:
+
+```bash
+uv run scripts/plot_route_paths.py                    # writes dat/route_paths.html
+uv run scripts/plot_route_paths.py --routes 22 --no-points --output route22.html
+```
+
+Each bus's sightings are joined into a polyline, colored by route, with one toggleable layer per route. A bus's line is broken when consecutive sightings are more than `--max-gap-minutes` apart (default 15).
 
 ### Python API
 
@@ -93,7 +104,7 @@ The Docker image includes an entrypoint that can run any script from the `script
 docker compose build
 
 # Run a script with arguments
-docker run --rm -v ./dat:/app/dat aaata-bus:latest collect_data.py --routes 4 --interval-minutes 2
+docker run --rm -v ./dat:/app/dat aaata-bus:latest collect_data.py --routes 4 --prediction-interval-minutes 2
 
 # Run pytest inside the container
 docker run --rm aaata-bus:latest pytest

@@ -9,10 +9,18 @@ _LOCAL_TZ = ZoneInfo("America/Detroit")
 
 
 def _parse_ride_timestamp(value: Any) -> datetime:
-    """Parse 'YYYYMMDD HH:MM' stamps as America/Detroit datetimes."""
+    """Parse 'YYYYMMDD HH:MM' stamps as America/Detroit datetimes.
+
+    Also accepts ISO 8601 strings, which is how these models serialize, so that
+    saved data can be read back in.
+    """
     if isinstance(value, datetime):
         return value
-    return datetime.strptime(str(value).strip(), "%Y%m%d %H:%M").replace(tzinfo=_LOCAL_TZ)
+    text = str(value).strip()
+    try:
+        return datetime.strptime(text, "%Y%m%d %H:%M").replace(tzinfo=_LOCAL_TZ)
+    except ValueError:
+        return datetime.fromisoformat(text)
 
 
 def _ensure_list(value: Any) -> list[Any]:
@@ -121,3 +129,15 @@ class PredictionsForBusResponse(BaseModel):
     @classmethod
     def from_api(cls, payload: dict[str, Any]) -> "PredictionsForBusResponse":
         return cls.model_validate(payload["bustime-response"])
+
+
+class RouteData(BaseModel):
+    """One polling snapshot of a route, as written to the collected jsonl file."""
+
+    route_id: str
+    buses: list[Bus]
+    predictions: dict[str, list[BusPrediction]]  # vehicle_id -> predictions
+    # False for location-only snapshots, where `predictions` is empty because
+    # predictions were not requested (not because none were returned).
+    # Defaults to True so data saved before this flag existed still loads.
+    predictions_collected: bool = True

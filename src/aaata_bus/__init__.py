@@ -3,6 +3,7 @@ from aaata_bus.schema import (
     BusesForRouteResponse,
     BusPrediction,
     PredictionsForBusResponse,
+    RouteData,
 )
 
 from aaata_bus.api import get_buses_for_route, get_predictions_for_bus
@@ -14,6 +15,7 @@ __all__ = [
     "BusesForRouteResponse",
     "BusPrediction",
     "PredictionsForBusResponse",
+    "RouteData",
     "BUSSES_FOR_ROUTE_URL",
     "PREDICTIONS_FOR_BUS_URL",
     "DATA_PATH",

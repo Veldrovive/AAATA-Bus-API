@@ -57,6 +57,33 @@ Beneath the bus lines, each route's scheduled path is drawn as a wide, faint lin
 
 A second control on the map, next to the route layers, has "Route paths & stops" and "Bus pings" checkboxes. They show or hide that kind of overlay on every route at once, so you can look at just the scheduled routes or just the bus sightings. When a route has an active detour, a "Detours" checkbox also appears. Checked, detoured routes show their detour path (dashed); unchecked, they show their regular path instead. Stops that are only on the hidden path are hidden with it.
 
+When route shapes are drawn, the "Bus pings" checkbox also has two views. "Raw" shows each sighting where it was reported, joined in time order. "Snapped" moves each sighting onto its pattern's path, drawn as markers only, because lines between snapped points would just retrace the path. Hover a snapped ping to see how far along its pattern it is and how far off the path it was. Pings more than `--max-offset-ft` (default 150) from their path, or on a pattern with no fetched shape, are drawn as hollow circles at their raw position. `--pings snapped` opens the map in the snapped view.
+
+### Linear referencing
+
+`aaata_bus.geometry` locates positions as distance along a route pattern instead of by latitude and longitude:
+
+```python
+from aaata_bus import get_buses_for_route, get_route, pattern_geometries
+
+route = get_route("22")
+geometries = pattern_geometries([route])  # keyed by pattern_id, matching Bus.pattern_id
+for bus in get_buses_for_route("22") or []:
+    geometry = geometries[bus.pattern_id]
+    where = geometry.project(bus.latitude, bus.longitude)
+    print(f"Bus {bus.vehicle_id}: {where.dist_along_ft:,.0f} of {geometry.length_ft:,.0f} ft "
+          f"({where.offset_ft:.0f} ft off the path)")
+
+for stop in geometries[route.patterns[0].pattern_id].stops:
+    print(f"{stop.stop_name}: {stop.dist_along_ft:,.0f} ft along")
+```
+
+To check it against TheRide's own `distance_to_stop_ft` in the collected predictions:
+
+```bash
+uv run scripts/check_linear_referencing.py
+```
+
 ### Python API
 
 You can use the `aaata_bus` package directly in Python:

@@ -25,6 +25,18 @@ from aaata_bus.api import (
     get_route_async,
     get_service_bulletins,
     get_service_bulletins_async,
+    get_routes,
+)
+
+from aaata_bus.geometry import (
+    PatternGeometry,
+    Projection,
+    SnappedPing,
+    StopDistanceCheck,
+    StopPosition,
+    check_stop_distances,
+    pattern_geometries,
+    snap_sightings,
 )
 
 from aaata_bus.definitions import *
@@ -60,5 +72,14 @@ __all__ = [
     "get_route_async",
     "get_service_bulletins",
     "get_service_bulletins_async",
+    "get_routes",
+    "PatternGeometry",
+    "Projection",
+    "SnappedPing",
+    "StopDistanceCheck",
+    "StopPosition",
+    "check_stop_distances",
+    "pattern_geometries",
+    "snap_sightings",
 ]
 

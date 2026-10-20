@@ -95,7 +95,7 @@ def test_plot_route_paths_tags_shapes_for_overlay_toggle(tmp_path):
     plot_route_paths(paths, routes=[route]).save(out)
     html = out.read_text()
     assert '"className": "route-shape"' in html
-    assert '"className": "bus-ping"' in html
+    assert '"className": "bus-ping ping-raw"' in html
     assert "overlay-toggle" in html
     # The fixture has an active detour, so both versions of that pattern are tagged.
     assert '"className": "route-shape detour-path"' in html
@@ -116,3 +116,41 @@ def test_detour_class_treats_dtr_points_as_the_bypassed_regular_path():
     assert _detour_class(is_bypassed=False, pattern_detoured=True) == "detour-path"
     assert _detour_class(is_bypassed=True, pattern_detoured=True) == "detour-regular"
     assert _detour_class(is_bypassed=False, pattern_detoured=False) == ""
+
+
+def route_22_bus(lat: float, lon: float, minutes: int) -> Bus:
+    """A bus on the fixture's undetoured TO PPC pattern."""
+    return make_bus("561", minutes, lat).model_copy(update={"longitude": lon, "pattern_id": "7599"})
+
+
+def test_plot_route_paths_draws_raw_and_snapped_pings(tmp_path):
+    route = Route.from_api(json.loads((FIXTURES / "route_22.json").read_text()))
+    stop_point = next(p for p in route.patterns if p.pattern_id == "7599").points[10]
+    paths = trace_bus_paths([
+        snapshot(route_22_bus(stop_point.latitude + 0.0001, stop_point.longitude, 0)),
+        snapshot(route_22_bus(stop_point.latitude, stop_point.longitude + 0.0001, 1)),
+        snapshot(route_22_bus(42.0, -83.0, 2)),  # far off the route
+    ])
+    out = tmp_path / "map.html"
+    plot_route_paths(paths, routes=[route]).save(out)
+    html = out.read_text()
+
+    assert '"className": "bus-ping ping-raw"' in html
+    assert html.count('"className": "bus-ping ping-snapped"') == 3  # snapped pings: markers only
+    assert "too far to snap" in html
+    assert "ft along pattern 7599" in html
+    assert 'radio.checked = view[0] === "raw"' in html
+    assert 'classList.toggle("snapped-pings", false)' in html
+
+    plot_route_paths(paths, routes=[route], ping_view="snapped").save(out)
+    assert 'classList.toggle("snapped-pings", true)' in out.read_text()
+
+
+def test_snapped_pings_need_route_shapes(tmp_path):
+    paths = trace_bus_paths([snapshot(make_bus("561", 0, 42.1)), snapshot(make_bus("561", 5, 42.2))])
+    out = tmp_path / "map.html"
+    plot_route_paths(paths, ping_view="snapped").save(out)
+    html = out.read_text()
+    assert "ping-snapped" not in html.replace(".ping-snapped", "")
+    assert '"className": "bus-ping"' in html
+    assert "snapped to route path" not in html

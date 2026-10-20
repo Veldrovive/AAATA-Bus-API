@@ -221,3 +221,17 @@ def test_get_service_bulletins_async():
             return await get_service_bulletins_async(client, "22")
 
     assert len(asyncio.run(run())) == 3
+
+
+def test_get_routes_skips_failures_with_a_warning(monkeypatch):
+    payload = load_fixture("route_22.json")
+
+    def get(url: str) -> httpx.Response:
+        status = 500 if "id=99" in url else 200
+        return httpx.Response(status, json=payload, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(api.httpx, "get", get)
+    monkeypatch.setattr(api.time, "sleep", lambda _: None)
+    with pytest.warns(UserWarning, match="route 99"):
+        routes = api.get_routes(["22", "99"])
+    assert [route.route_id for route in routes] == ["22"]

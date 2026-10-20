@@ -1,13 +1,17 @@
 """Map of the paths each route's buses have traced."""
 
 from collections import defaultdict
+from typing import Literal
 
 import folium
 from branca.element import MacroElement, Template
 from xyzservices import providers
 
-from aaata_bus.schema import Route, RoutePattern, RoutePoint
+from aaata_bus.geometry import DEFAULT_MAX_OFFSET_FT, PatternGeometry, pattern_geometries, snap_sightings
+from aaata_bus.schema import Bus, Route, RoutePattern, RoutePoint
 from aaata_bus.visualization.data import BusPath
+
+PingView = Literal["raw", "snapped"]
 
 #: Categorical hues, assigned to routes in this fixed order. Only the first three
 #: stay distinguishable for colorblind viewers when lines cross, so past that
@@ -32,6 +36,11 @@ BUS_PING_CLASS = "bus-ping"
 #: one is shown at a time, picked by the overlay toggle's "Detours" checkbox.
 DETOUR_PATH_CLASS = "detour-path"
 DETOUR_REGULAR_CLASS = "detour-regular"
+#: Bus pings are drawn twice: as raw sightings joined by lines, and snapped onto
+#: their pattern's path (no lines, since they'd only retrace the path). The
+#: overlay toggle's "Bus pings" radio shows one set at a time.
+PING_RAW_CLASS = "ping-raw"
+PING_SNAPPED_CLASS = "ping-snapped"
 
 
 class _OverlayToggle(MacroElement):
@@ -40,12 +49,16 @@ class _OverlayToggle(MacroElement):
     Works across all route layers (which stay individually toggleable) by
     toggling an `off-<name>` class on the map container while a box is unchecked;
     the CSS hides the matching shapes. With `has_detours`, a "Detours" box swaps
-    detoured patterns between their detour path and their regular path.
+    detoured patterns between their detour path and their regular path. With
+    `has_snapped`, a raw/snapped radio picks which version of the bus pings is
+    shown, starting at `ping_view`, via a `snapped-pings` class on the container.
     """
 
-    def __init__(self, has_detours: bool) -> None:
+    def __init__(self, has_detours: bool, has_snapped: bool = False, ping_view: PingView = "raw") -> None:
         super().__init__()
         self.has_detours = has_detours
+        self.has_snapped = has_snapped
+        self.ping_view = ping_view
 
     _template = Template(
         """
@@ -54,8 +67,11 @@ class _OverlayToggle(MacroElement):
             .off-route-shape .route-shape,
             .off-bus-ping .bus-ping,
             .off-detour .detour-path,
-            .leaflet-container:not(.off-detour) .detour-regular { display: none; }
+            .leaflet-container:not(.off-detour) .detour-regular,
+            .snapped-pings .ping-raw,
+            .leaflet-container:not(.snapped-pings) .ping-snapped { display: none; }
             .overlay-toggle label { display: block; }
+            .overlay-toggle .ping-view { margin-left: 1.2em; }
         </style>
         {% endmacro %}
         {% macro script(this, kwargs) %}
@@ -80,6 +96,22 @@ class _OverlayToggle(MacroElement):
                         map.getContainer().classList.toggle("off-" + item[0], !box.checked);
                     });
                 });
+                {% if this.has_snapped %}
+                var container = map.getContainer();
+                container.classList.toggle("snapped-pings", {{ (this.ping_view == "snapped") | tojson }});
+                [["raw", "raw, joined in time order"], ["snapped", "snapped to route path"]].forEach(
+                    function (view) {
+                        var label = L.DomUtil.create("label", "ping-view", div);
+                        var radio = L.DomUtil.create("input", "", label);
+                        radio.type = "radio";
+                        radio.name = "{{ this.get_name() }}-ping-view";
+                        radio.checked = view[0] === {{ this.ping_view | tojson }};
+                        label.appendChild(document.createTextNode(" " + view[1]));
+                        L.DomEvent.on(radio, "change", function () {
+                            container.classList.toggle("snapped-pings", view[0] === "snapped");
+                        });
+                    });
+                {% endif %}
                 return div;
             };
             control.addTo(map);
@@ -100,6 +132,63 @@ def _describe(path: BusPath) -> str:
         f"{path.start:%b %d %H:%M} – {path.end:%H:%M} ({len(path.sightings)} sightings)<br>"
         f"{destinations}"
     )
+
+
+def _ping_tooltip(path: BusPath, bus: Bus) -> str:
+    return (
+        f"Route {path.route_id} &middot; bus {bus.vehicle_id}<br>"
+        f"{bus.timestamp:%b %d %H:%M} &middot; {bus.direction}"
+    )
+
+
+def _add_ping(
+    layer: folium.FeatureGroup,
+    location: tuple[float, float],
+    color: str,
+    class_name: str,
+    tooltip: str,
+    hollow: bool = False,
+) -> None:
+    folium.CircleMarker(
+        location,
+        radius=4,
+        color=color if hollow else "white",
+        weight=2,
+        fill=True,
+        fill_color="white" if hollow else color,
+        fill_opacity=1.0,
+        className=class_name,
+        tooltip=tooltip,
+    ).add_to(layer)
+
+
+def _add_snapped_pings(
+    path: BusPath,
+    geometries: dict[str, PatternGeometry],
+    color: str,
+    layer: folium.FeatureGroup,
+    max_offset_ft: float,
+) -> None:
+    """Draw a path's pings snapped onto their patterns; pings that don't snap
+    are drawn hollow where they were seen."""
+    class_name = f"{BUS_PING_CLASS} {PING_SNAPPED_CLASS}"
+    for ping in snap_sightings(path.sightings, geometries, max_offset_ft):
+        tooltip = _ping_tooltip(path, ping.bus)
+        projection = ping.projection
+        if projection is None:
+            tooltip += f"<br><i>not snapped: no path for pattern {ping.bus.pattern_id}</i>"
+        else:
+            tooltip += (
+                f"<br>{projection.dist_along_ft:,.0f} ft along pattern {ping.bus.pattern_id}"
+                f" &middot; {projection.offset_ft:,.0f} ft off it"
+            )
+        if projection is not None and ping.on_route:
+            location = (projection.latitude, projection.longitude)
+        else:
+            location = (ping.bus.latitude, ping.bus.longitude)
+            if projection is not None:
+                tooltip += " <i>(too far to snap)</i>"
+        _add_ping(layer, location, color, class_name, tooltip, hollow=not ping.on_route)
 
 
 def _detour_runs(points: list[RoutePoint]) -> list[tuple[bool, list[tuple[float, float]]]]:
@@ -185,6 +274,8 @@ def plot_route_paths(
     show_points: bool = True,
     routes: list[Route] | None = None,
     show_stops: bool = True,
+    ping_view: PingView = "raw",
+    max_offset_ft: float = DEFAULT_MAX_OFFSET_FT,
 ) -> folium.Map:
     """Draw each bus path as a polyline, colored and layered by route.
 
@@ -194,11 +285,18 @@ def plot_route_paths(
         routes: Route descriptions from `get_route`; each one's scheduled
             patterns are drawn beneath its buses' paths, in the same layer.
         show_stops: Mark each route's stops (only applies with `routes`).
+        ping_view: Which bus pings the map opens showing: "raw" sightings
+            joined by lines, or "snapped" onto their pattern's path (only
+            applies with `routes`; the map's toggle switches between them).
+            Pings further than `max_offset_ft` from their path, or on a pattern
+            not in `routes`, are drawn hollow at their raw position when snapped.
+        max_offset_ft: How far from its path a ping can be and still snap.
 
     Returns:
         A folium map with one toggleable layer per route, plus a control that
-        shows or hides all route shapes or all bus pings at once, and switches
-        detoured patterns between their detour and regular paths.
+        shows or hides all route shapes or all bus pings at once, switches
+        detoured patterns between their detour and regular paths, and switches
+        bus pings between raw and snapped.
     """
     # Esri needs no API key (unlike CARTO) and no Referer header (unlike OSM), so
     # tiles load when the HTML is opened straight from disk.
@@ -217,6 +315,7 @@ def plot_route_paths(
         by_route[path.route_id].append(path)
 
     shapes = {route.route_id: route for route in routes or []}
+    geometries = pattern_geometries(shapes.values())
 
     route_ids = sorted(by_route.keys() | shapes.keys(), key=_route_sort_key)
     for i, route_id in enumerate(route_ids):
@@ -225,32 +324,21 @@ def plot_route_paths(
         if route_id in shapes:
             _add_route_shape(shapes[route_id], color, layer, show_stops)
         for path in by_route[route_id]:
-            description = _describe(path)
+            raw_class = f"{BUS_PING_CLASS} {PING_RAW_CLASS}" if geometries else BUS_PING_CLASS
             if len(path.sightings) > 1:
                 folium.PolyLine(
                     path.coordinates,
                     color=color,
                     weight=3,
                     opacity=0.8,
-                    className=BUS_PING_CLASS,
-                    tooltip=description,
+                    className=raw_class,
+                    tooltip=_describe(path),
                 ).add_to(layer)
             if show_points or len(path.sightings) == 1:
                 for bus in path.sightings:
-                    folium.CircleMarker(
-                        (bus.latitude, bus.longitude),
-                        radius=4,
-                        color="white",
-                        weight=2,
-                        fill=True,
-                        fill_color=color,
-                        fill_opacity=1.0,
-                        className=BUS_PING_CLASS,
-                        tooltip=(
-                            f"Route {path.route_id} &middot; bus {bus.vehicle_id}<br>"
-                            f"{bus.timestamp:%b %d %H:%M} &middot; {bus.direction}"
-                        ),
-                    ).add_to(layer)
+                    _add_ping(layer, (bus.latitude, bus.longitude), color, raw_class, _ping_tooltip(path, bus))
+            if geometries:
+                _add_snapped_pings(path, geometries, color, layer, max_offset_ft)
         layer.add_to(fmap)
 
     coords = [c for path in paths for c in path.coordinates]
@@ -265,6 +353,8 @@ def plot_route_paths(
         fmap.fit_bounds([(min(lats), min(lons)), (max(lats), max(lons))], padding=(20, 20))
     folium.LayerControl(collapsed=False).add_to(fmap)
     _OverlayToggle(
-        has_detours=any(_is_detoured(p) for route in shapes.values() for p in route.patterns)
+        has_detours=any(_is_detoured(p) for route in shapes.values() for p in route.patterns),
+        has_snapped=bool(geometries) and bool(paths),
+        ping_view=ping_view,
     ).add_to(fmap)
     return fmap

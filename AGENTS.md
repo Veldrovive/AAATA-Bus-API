@@ -25,7 +25,16 @@ arrival-time modelling built on the collected data.
     matches `Bus.pattern_id`. `ServiceBulletin` models `method=getservicebulletins`, a
     fuller bulletin format than the `RouteBulletin` embedded in `getroutebyid`.
   - `api.py` — sync (`httpx.get`) and async (shared `httpx.AsyncClient`) fetchers
-    sharing `_parse_*_response` helpers.
+    sharing `_parse_*_response` helpers. `get_routes` fetches several routes with a
+    courtesy wait, skipping (with a warning) any that fail.
+  - `geometry.py` — linear referencing (numpy). `PatternGeometry` turns a `RoutePattern`
+    into a polyline in local feet (detoured patterns use the detour path, minus stop
+    spurs; see gotchas) with stops located by distance along it. `project()` gives
+    `(dist_along_ft, offset_ft)` plus the snapped point; `near_ft` picks between passes
+    where the path goes by a point more than once. `snap_sightings` projects one bus's
+    time-ordered pings, each near the last (`SnappedPing.on_route` is false past
+    `max_offset_ft`, default 150). `check_stop_distances` compares our distances with
+    each prediction's `distance_to_stop_ft`.
   - `route.py` — stub `BusRoute` class, not yet used.
   - `visualization/` — `data.py` loads `RouteData` and traces per-bus `BusPath`s;
     `route_paths.py` renders them as a folium map, optionally drawing `Route` shapes
@@ -34,12 +43,19 @@ arrival-time modelling built on the collected data.
     each kind across all layers by toggling an `off-<name>` class on the map container.
     Detoured patterns also tag their runs `detour-path` / `detour-regular`, and the
     "Detours" box (shown only when a detour exists) picks which one is visible.
+    With route shapes, bus pings are drawn twice, `ping-raw` (joined by lines) and
+    `ping-snapped` (markers on the path, no lines; unsnappable pings hollow at their raw
+    position), and a radio toggles a `snapped-pings` class on the container.
   - `__init__.py` — re-exports the public API; update `__all__` when adding exports.
-- `scripts/` — runnable entry points (`collect_data.py`, `plot_route_paths.py`), run
+- `scripts/` — runnable entry points (`collect_data.py`, `plot_route_paths.py`,
+  `check_linear_referencing.py`), run
   with `uv run scripts/<name>.py`. The Docker entrypoint can run any script here by name.
   `plot_route_paths.py --serve [PORT]` serves the map on localhost (stdlib `http.server`)
   for viewing from a remote machine via port forwarding. It fetches each plotted route's shape
-  via `get_route` (courtesy wait between requests); `--no-route-shapes` skips that.
+  via `get_routes`; `--no-route-shapes` skips that. `--pings raw|snapped` sets which ping
+  view the map opens on. `check_linear_referencing.py` reports ping offsets and how our
+  distances to stops compare with TheRide's, split into a per-bus position term and a
+  per-stop geometry term.
 - `tests/` — pytest suite. `test_api.py` tests the API layer offline against recorded
   responses in `tests/fixtures/` (`route_22.json` has an active detour, so it exercises
   the single-object quirk for detours and bulletins). `test_api_live.py` hits the real TheRide API (needs
@@ -86,6 +102,21 @@ returning payloads from `tests/fixtures/`. Live tests must tolerate an empty sys
   `RideTimestamp` also accepts. Timestamps come as
   `YYYYMMDD HH:MM` in America/Detroit time; `RideTimestamp` parses these and also ISO
   strings so serialized data round-trips.
+- **Route geometry:** many stops are drawn as a short spur off the street to the curb
+  and back (`A, STOP, A`, or nested `A, B, STOP, B', A'`, with return vertices often ~1 ft
+  off). `PatternGeometry` cuts spurs of at most 200 ft containing a stop; left in, they
+  add ~70 ft per stop, which TheRide's `distance_to_stop_ft` doesn't count. Longer
+  out-and-backs to a stop (into a side street or lot) are real travel the agency does
+  count, so they stay. With spurs removed, most stop-to-stop links match the agency to
+  within a few feet. Some of route 22's detour-path links still come out 40–70 ft longer
+  than theirs, probably because their internal shape differs from the drawn one.
+  Separately, the agency's distances often put the bus a few hundred feet ahead of its
+  `busesforroute` position (the per-bus term in the check script).
+- **Route shapes are fetched live**, not stored with the data, so data collected under
+  a different detour or service change may not snap. Patterns change with detours (route
+  22's detour pattern is `501321`).
+- Predictions for a bus run on into its next trip (usually on another pattern), so
+  filter by `trip_id` before comparing them with the current pattern.
 - `Bus.timestamp` is set locally (`datetime.now()`) after the response arrives; the bus
   API provides no fix time.
 - **Be polite to the API:** the collector uses a random courtesy wait between requests.

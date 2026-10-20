@@ -1,6 +1,10 @@
-import httpx
-
+import random
+import time
+import warnings
+from collections.abc import Iterable
 from datetime import datetime
+
+import httpx
 
 from aaata_bus.definitions import (
     BUSSES_FOR_ROUTE_URL, PREDICTIONS_FOR_BUS_URL, ROUTE_BY_ID_URL, SERVICE_BULLETINS_URL,
@@ -108,3 +112,23 @@ async def get_service_bulletins_async(
 ) -> list[ServiceBulletin]:
     """Async version of get_service_bulletins using a shared client."""
     return _parse_service_bulletins_response(await client.get(_service_bulletins_url(route_id)))
+
+#: Seconds to wait between requests in get_routes, to be polite to the API.
+ROUTES_COURTESY_WAIT_RANGE_S = (0.5, 1.5)
+
+def get_routes(
+    route_ids: Iterable[str],
+    courtesy_wait_range_s: tuple[float, float] = ROUTES_COURTESY_WAIT_RANGE_S,
+) -> list[Route]:
+    """Fetch several routes with get_route, waiting a random courtesy interval
+    between requests. A route that fails to fetch is skipped with a warning.
+    """
+    routes = []
+    for i, route_id in enumerate(route_ids):
+        if i:
+            time.sleep(random.uniform(*courtesy_wait_range_s))
+        try:
+            routes.append(get_route(route_id))
+        except httpx.HTTPError as e:
+            warnings.warn(f"couldn't fetch route {route_id}: {e}", stacklevel=2)
+    return routes

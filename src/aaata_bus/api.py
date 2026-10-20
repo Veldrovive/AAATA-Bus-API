@@ -8,13 +8,20 @@ from typing import Any
 import httpx
 
 from aaata_bus.definitions import (
-    BUSSES_FOR_ROUTE_URL, PREDICTIONS_FOR_BUS_URL, ROUTE_BY_ID_URL, SERVICE_BULLETINS_URL,
+    BUSSES_FOR_ROUTE_URL, PREDICTIONS_FOR_BUS_URL, REQUEST_HEADERS, ROUTE_BY_ID_URL, SERVICE_BULLETINS_URL,
 )
 from aaata_bus.schema import (
     BusesForRouteResponse, BusPrediction,
     Bus, PredictionsForBusResponse, Route,
     ServiceBulletin, ServiceBulletinsResponse,
 )
+
+def _get(url: str) -> httpx.Response:
+    return httpx.get(url, headers=REQUEST_HEADERS)
+
+async def _get_async(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    # Per-request headers, so callers' own clients identify us too.
+    return await client.get(url, headers=REQUEST_HEADERS)
 
 def _parse_buses_response(response: httpx.Response) -> list[Bus] | None:
     response.raise_for_status()
@@ -57,7 +64,7 @@ def get_buses_for_route(route_id: str) -> list[Bus] | None:
         A BusesResponse object containing the buses for the route.
     """
     url = BUSSES_FOR_ROUTE_URL.format(route_id=route_id)
-    return _parse_buses_response(httpx.get(url))
+    return _parse_buses_response(_get(url))
 
 def get_predictions_for_bus(vehicle_id: str) -> list[BusPrediction] | None:
     """Get all predictions for a specific bus.
@@ -69,7 +76,7 @@ def get_predictions_for_bus(vehicle_id: str) -> list[BusPrediction] | None:
         A PredictionsResponse object containing the predictions for the bus.
     """
     url = PREDICTIONS_FOR_BUS_URL.format(vehicle_id=vehicle_id)
-    return _parse_predictions_response(httpx.get(url))
+    return _parse_predictions_response(_get(url))
 
 def get_route(route_id: str) -> Route:
     """Get a route's description: name, colour, pattern paths with stops, detours
@@ -82,11 +89,11 @@ def get_route(route_id: str) -> Route:
         The Route. An unknown route id gives a stub with no name or patterns.
     """
     url = ROUTE_BY_ID_URL.format(route_id=route_id)
-    return _parse_route_response(httpx.get(url))
+    return _parse_route_response(_get(url))
 
 def get_route_payload(route_id: str) -> dict[str, Any]:
     """The raw getroutebyid JSON for a route, unparsed (as saved in RouteVersion)."""
-    return _route_payload(httpx.get(ROUTE_BY_ID_URL.format(route_id=route_id)))
+    return _route_payload(_get(ROUTE_BY_ID_URL.format(route_id=route_id)))
 
 def get_service_bulletins(route_id: str | None = None) -> list[ServiceBulletin]:
     """Get rider-facing service bulletins (detours, closures, notices).
@@ -98,32 +105,32 @@ def get_service_bulletins(route_id: str | None = None) -> list[ServiceBulletin]:
     Returns:
         The bulletins; empty if there are none or the route id is unknown.
     """
-    return _parse_service_bulletins_response(httpx.get(_service_bulletins_url(route_id)))
+    return _parse_service_bulletins_response(_get(_service_bulletins_url(route_id)))
 
 async def get_buses_for_route_async(client: httpx.AsyncClient, route_id: str) -> list[Bus] | None:
     """Async version of get_buses_for_route using a shared client."""
     url = BUSSES_FOR_ROUTE_URL.format(route_id=route_id)
-    return _parse_buses_response(await client.get(url))
+    return _parse_buses_response(await _get_async(client, url))
 
 async def get_predictions_for_bus_async(client: httpx.AsyncClient, vehicle_id: str) -> list[BusPrediction] | None:
     """Async version of get_predictions_for_bus using a shared client."""
     url = PREDICTIONS_FOR_BUS_URL.format(vehicle_id=vehicle_id)
-    return _parse_predictions_response(await client.get(url))
+    return _parse_predictions_response(await _get_async(client, url))
 
 async def get_route_async(client: httpx.AsyncClient, route_id: str) -> Route:
     """Async version of get_route using a shared client."""
     url = ROUTE_BY_ID_URL.format(route_id=route_id)
-    return _parse_route_response(await client.get(url))
+    return _parse_route_response(await _get_async(client, url))
 
 async def get_route_payload_async(client: httpx.AsyncClient, route_id: str) -> dict[str, Any]:
     """Async version of get_route_payload using a shared client."""
-    return _route_payload(await client.get(ROUTE_BY_ID_URL.format(route_id=route_id)))
+    return _route_payload(await _get_async(client, ROUTE_BY_ID_URL.format(route_id=route_id)))
 
 async def get_service_bulletins_async(
     client: httpx.AsyncClient, route_id: str | None = None
 ) -> list[ServiceBulletin]:
     """Async version of get_service_bulletins using a shared client."""
-    return _parse_service_bulletins_response(await client.get(_service_bulletins_url(route_id)))
+    return _parse_service_bulletins_response(await _get_async(client, _service_bulletins_url(route_id)))
 
 #: Seconds to wait between requests in get_routes, to be polite to the API.
 ROUTES_COURTESY_WAIT_RANGE_S = (0.5, 1.5)

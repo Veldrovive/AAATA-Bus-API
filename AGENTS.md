@@ -15,7 +15,8 @@ arrival-time modelling built on the collected data.
 
 - `src/aaata_bus/` — the installable package (uv build backend, `src` layout, `py.typed`).
   - `definitions.py` — API URL templates, `DATA_PATH` (from `AAATA_DATA_PATH`, defaults
-    to `./dat` at the repo root), and `ensure_dat()`, which asserts the data dir exists.
+    to `./dat` at the repo root), `ensure_dat()`, which asserts the data dir exists, and
+    `USER_AGENT` / `REQUEST_HEADERS` (identifies us to TheRide with a contact email).
   - `schema.py` — Pydantic models. `Bus` and `BusPrediction` map TheRide's terse field
     names to readable ones via `Field(alias=...)`; keep the inline comments explaining
     each field. `RouteData` is one polling snapshot, the line format of the jsonl file.
@@ -25,7 +26,9 @@ arrival-time modelling built on the collected data.
     matches `Bus.pattern_id`. `ServiceBulletin` models `method=getservicebulletins`, a
     fuller bulletin format than the `RouteBulletin` embedded in `getroutebyid`.
   - `api.py` — sync (`httpx.get`) and async (shared `httpx.AsyncClient`) fetchers
-    sharing `_parse_*_response` helpers. `get_routes` fetches several routes with a
+    sharing `_parse_*_response` helpers. All requests go through `_get` / `_get_async`,
+    which send `REQUEST_HEADERS` per request (so a caller's own client sends them too);
+    test fakes of `httpx.get` must accept a `headers` argument. `get_routes` fetches several routes with a
     courtesy wait, skipping (with a warning) any that fail.
   - `geometry.py` — linear referencing (numpy). `PatternGeometry` turns a `RoutePattern`
     into a polyline in local feet (detoured patterns use the detour path, minus stop
@@ -159,7 +162,8 @@ returning payloads from `tests/fixtures/`. Live tests must tolerate an empty sys
 - `Bus.timestamp` is set locally (`datetime.now()`) after the response arrives; the bus
   API provides no fix time.
 - **Be polite to the API:** the collector uses a random courtesy wait between requests.
-  Keep it; don't add tight polling loops.
+  Keep it; don't add tight polling loops. Every request carries the `User-Agent` with a
+  contact email; route new requests through `api._get` / `_get_async` so they do too.
 - The collector checks each route's description every `--route-interval-minutes` (60),
   starting at startup, and loads the existing versions file first so a restart doesn't
   re-save. The payload has no volatile fields, but **the order of patterns varies between

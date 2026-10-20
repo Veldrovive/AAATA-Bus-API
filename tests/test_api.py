@@ -19,6 +19,7 @@ from aaata_bus.api import (
     get_service_bulletins,
     get_service_bulletins_async,
 )
+from aaata_bus.definitions import USER_AGENT
 from aaata_bus.schema import Bus, BusPrediction, Route, ServiceBulletin
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -31,7 +32,7 @@ def load_fixture(name: str) -> Any:
 def fake_get(payload: Any, status_code: int = 200):
     """Stand-in for httpx.get that returns `payload` for any URL."""
 
-    def get(url: str) -> httpx.Response:
+    def get(url: str, headers: dict[str, str] | None = None) -> httpx.Response:
         return httpx.Response(status_code, json=payload, request=httpx.Request("GET", url))
 
     return get
@@ -39,6 +40,35 @@ def fake_get(payload: Any, status_code: int = 200):
 
 def fake_client(payload: Any) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)))
+
+
+def test_sync_requests_send_user_agent(monkeypatch):
+    sent: list[dict[str, str] | None] = []
+
+    def get(url: str, headers: dict[str, str] | None = None) -> httpx.Response:
+        sent.append(headers)
+        return httpx.Response(200, json={"buses": {"bus": None}}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(api.httpx, "get", get)
+    get_buses_for_route("22")
+    assert sent == [{"User-Agent": USER_AGENT}]
+
+
+def test_async_requests_send_user_agent():
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["User-Agent"])
+        return httpx.Response(200, json={"buses": {"bus": None}})
+
+    async def run() -> None:
+        # A caller's own client, without our headers, still identifies us.
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            await get_buses_for_route_async(client, "22")
+
+    asyncio.run(run())
+    assert sent == [USER_AGENT]
+    assert "adempst.dev@gmail.com" in USER_AGENT
 
 
 def test_get_buses_for_route(monkeypatch):
@@ -178,7 +208,7 @@ def test_get_service_bulletins(monkeypatch):
     urls: list[str] = []
     payload = load_fixture("service_bulletins_22.json")
 
-    def get(url: str) -> httpx.Response:
+    def get(url: str, headers: dict[str, str] | None = None) -> httpx.Response:
         urls.append(url)
         return httpx.Response(200, json=payload, request=httpx.Request("GET", url))
 
@@ -226,7 +256,7 @@ def test_get_service_bulletins_async():
 def test_get_routes_skips_failures_with_a_warning(monkeypatch):
     payload = load_fixture("route_22.json")
 
-    def get(url: str) -> httpx.Response:
+    def get(url: str, headers: dict[str, str] | None = None) -> httpx.Response:
         status = 500 if "id=99" in url else 200
         return httpx.Response(status, json=payload, request=httpx.Request("GET", url))
 

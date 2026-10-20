@@ -16,6 +16,10 @@ ROUTE_BY_ID_URL = (
 #: Without a routeid this returns every bulletin; append "&routeid=..." to filter.
 SERVICE_BULLETINS_URL = "https://www.theride.org/api/ServiceData?method=getservicebulletins"
 
+#: Sent with every request so TheRide can tell who is polling and get in touch.
+USER_AGENT = "aaata-bus (research data collector; contact: adempst.dev@gmail.com)"
+REQUEST_HEADERS = {"User-Agent": USER_AGENT}
+
 DEFAULT_DATA_PATH = Path(__file__).parent.parent.parent / "dat"
 DATA_PATH = Path(os.getenv("AAATA_DATA_PATH", DEFAULT_DATA_PATH))
 def ensure_dat() -> Path:

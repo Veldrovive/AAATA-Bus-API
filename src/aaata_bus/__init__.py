@@ -39,6 +39,13 @@ from aaata_bus.geometry import (
     snap_sightings,
 )
 
+from aaata_bus.trips import (
+    Trip,
+    TripPing,
+    reconstruct_trips,
+    trip_pings_rows,
+)
+
 from aaata_bus.definitions import *
 
 __all__ = [
@@ -81,5 +88,9 @@ __all__ = [
     "check_stop_distances",
     "pattern_geometries",
     "snap_sightings",
+    "Trip",
+    "TripPing",
+    "reconstruct_trips",
+    "trip_pings_rows",
 ]
 

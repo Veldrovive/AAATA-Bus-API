@@ -3,17 +3,13 @@ Writes an HTML map of the paths traced by each route's buses.
 """
 import argparse
 from datetime import timedelta
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote
 
 from aaata_bus import DATA_PATH, get_routes
 from aaata_bus.geometry import DEFAULT_MAX_OFFSET_FT
 from aaata_bus.visualization import load_route_data, plot_route_paths, trace_bus_paths
 from aaata_bus.visualization.data import DEFAULT_MAX_GAP, DEFAULT_ROUTE_DATA_FILE
-
-DEFAULT_SERVE_PORT = 8000
+from aaata_bus.visualization.serve import DEFAULT_SERVE_PORT, serve
 
 
 def main():
@@ -103,17 +99,6 @@ def main():
 
     if args.serve is not None:
         serve(args.output, args.serve)
-
-
-def serve(path: Path, port: int) -> None:
-    """Serve the directory containing `path` until interrupted."""
-    handler = partial(SimpleHTTPRequestHandler, directory=str(path.resolve().parent))
-    with ThreadingHTTPServer(("127.0.0.1", port), handler) as server:
-        print(f"Serving map at http://localhost:{port}/{quote(path.name)} (Ctrl+C to stop)")
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            pass
 
 
 if __name__ == "__main__":

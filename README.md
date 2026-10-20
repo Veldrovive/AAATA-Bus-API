@@ -59,7 +59,7 @@ A second control on the map, next to the route layers, has "Route paths & stops"
 
 When route shapes are drawn, the "Bus pings" checkbox also has two views. "Raw" shows each sighting where it was reported, joined in time order. "Snapped" moves each sighting onto its pattern's path, drawn as markers only, because lines between snapped points would just retrace the path. Hover a snapped ping to see how far along its pattern it is and how far off the path it was. Pings more than `--max-offset-ft` (default 150) from their path, or on a pattern with no fetched shape, are drawn as hollow circles at their raw position. `--pings snapped` opens the map in the snapped view.
 
-### Linear referencing
+### Linear referencing and trips
 
 `aaata_bus.geometry` locates positions as distance along a route pattern instead of by latitude and longitude:
 
@@ -78,7 +78,16 @@ for stop in geometries[route.patterns[0].pattern_id].stops:
     print(f"{stop.stop_name}: {stop.dist_along_ft:,.0f} ft along")
 ```
 
-To check it against TheRide's own `distance_to_stop_ft` in the collected predictions:
+To split the collected pings into trips (one vehicle's run along one pattern), smooth each trip's distances so they never go backwards, and join them to TheRide's trip ids from the predictions:
+
+```bash
+uv run scripts/reconstruct_trips.py            # writes dat/trip_pings.csv and dat/trips.html
+uv run scripts/reconstruct_trips.py --routes 22 --serve
+```
+
+`trip_pings.csv` has one row per ping: `trip_key`, UTC time `t`, `dist_ft` (smoothed) and `raw_dist_ft`, `offset_ft`, `is_repeat` (same position as the previous poll), the vehicle, operator, run and block, the pattern, and the joined `trip_id`, `scheduled_trip_id`, `service_date` and `trip_start_seconds`. `trips.html` is a time–distance chart with one panel per pattern. Each trip's smoothed curve is a line, raw pings are dots, dropped stale pings are hollow circles, and stops are faint horizontal lines. Hover for details. In Python, use `reconstruct_trips(snapshots, pattern_geometries(routes))`.
+
+To check the linear referencing against TheRide's own `distance_to_stop_ft` in the collected predictions:
 
 ```bash
 uv run scripts/check_linear_referencing.py

@@ -11,6 +11,7 @@ dependencies = [
     "folium>=0.20.0",
     "httpx>=0.28.1",
     "numpy>=2.5.4",
+    "plotly>=7.1.0",
     "pydantic>=2.13.5",
     "pytest>=9.1.1",
     "xyzservices>=2026.9.1",

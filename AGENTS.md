@@ -35,6 +35,16 @@ arrival-time modelling built on the collected data.
     time-ordered pings, each near the last (`SnappedPing.on_route` is false past
     `max_offset_ft`, default 150). `check_stop_distances` compares our distances with
     each prediction's `distance_to_stop_ft`.
+  - `trips.py` — trip reconstruction. `reconstruct_trips` splits each vehicle's pings
+    (timed by `requested_at`, as aware UTC) into `Trip`s: new trip on a pattern change,
+    a gap over `max_gap` (10 min), or distance falling `reset_ft` (1000 ft) below the
+    trip's furthest. Then consecutive pieces on one pattern are rejoined across gaps up to
+    `merge_gap` (30 min) if they carry on forward and their trip ids don't disagree.
+    Off-path pings are left out. Runs of repeated positions are kept (`is_repeat`) unless
+    the next move is faster than `stale_speed_ftps` (80 ft/s), in which case they go into
+    `stale_pings`. `dist_ft` is the isotonic fit of `raw_dist_ft`. `trip_id` is the
+    majority vote of the nearest-stop prediction's `trip_id` (only stops on the pattern
+    count). `trip_pings_rows` gives the tidy `trip_pings` table.
   - `route.py` — stub `BusRoute` class, not yet used.
   - `visualization/` — `data.py` loads `RouteData` and traces per-bus `BusPath`s;
     `route_paths.py` renders them as a folium map, optionally drawing `Route` shapes
@@ -46,16 +56,20 @@ arrival-time modelling built on the collected data.
     With route shapes, bus pings are drawn twice, `ping-raw` (joined by lines) and
     `ping-snapped` (markers on the path, no lines; unsnappable pings hollow at their raw
     position), and a radio toggles a `snapped-pings` class on the container.
+    `trip_plots.py` draws reconstructed trips as plotly time–distance panels, one per
+    pattern. Draw stop lines as one None-separated trace; `add_hline` per stop took 40 s.
+    `serve.py` has the localhost server the scripts' `--serve` uses.
   - `__init__.py` — re-exports the public API; update `__all__` when adding exports.
 - `scripts/` — runnable entry points (`collect_data.py`, `plot_route_paths.py`,
-  `check_linear_referencing.py`), run
+  `check_linear_referencing.py`, `reconstruct_trips.py`), run
   with `uv run scripts/<name>.py`. The Docker entrypoint can run any script here by name.
   `plot_route_paths.py --serve [PORT]` serves the map on localhost (stdlib `http.server`)
   for viewing from a remote machine via port forwarding. It fetches each plotted route's shape
   via `get_routes`; `--no-route-shapes` skips that. `--pings raw|snapped` sets which ping
   view the map opens on. `check_linear_referencing.py` reports ping offsets and how our
   distances to stops compare with TheRide's, split into a per-bus position term and a
-  per-stop geometry term.
+  per-stop geometry term. `reconstruct_trips.py` writes `dat/trip_pings.csv` and the
+  `dat/trips.html` chart, and prints how many pings were dropped and trips matched to ids.
 - `tests/` — pytest suite. `test_api.py` tests the API layer offline against recorded
   responses in `tests/fixtures/` (`route_22.json` has an active detour, so it exercises
   the single-object quirk for detours and bulletins). `test_api_live.py` hits the real TheRide API (needs
@@ -117,6 +131,15 @@ returning payloads from `tests/fixtures/`. Live tests must tolerate an empty sys
   22's detour pattern is `501321`).
 - Predictions for a bus run on into its next trip (usually on another pattern), so
   filter by `trip_id` before comparing them with the current pattern.
+- **Timezones:** `requested_at` and `Bus.timestamp` are naive on the collector's clock
+  (UTC in the container); prediction times are America/Detroit-aware. `trips.to_utc`
+  normalizes both (`naive_tz` overrides the UTC assumption).
+- **AVL quirks:** positions are already snapped to the street (median offset ~1 ft).
+  Sometimes a position jumps a few hundred feet *backward* for one poll and then
+  recovers (not a snapping error), which the isotonic fit absorbs. Repeated positions are
+  usually real stops; only implausible onward speeds mark them stale.
+- `dat/` is written by the container as root, so for local runs pass `--output`
+  (and `--plot`) to somewhere writable.
 - `Bus.timestamp` is set locally (`datetime.now()`) after the response arrives; the bus
   API provides no fix time.
 - **Be polite to the API:** the collector uses a random courtesy wait between requests.

@@ -13,7 +13,7 @@ services:
         "65",
         "66",
         "--general-interval-minutes",
-        "0.5",
+        "0.25",
         # Must be a whole multiple of --general-interval-minutes
         "--prediction-interval-minutes",
         "5",

@@ -1,6 +1,7 @@
 /.pytest_cache
 /dat
 .DS_Store
+/tasks
 
 # Python-generated files
 __pycache__/

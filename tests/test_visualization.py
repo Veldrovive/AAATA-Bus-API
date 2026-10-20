@@ -1,7 +1,13 @@
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
-from aaata_bus import Bus, RouteData
+from aaata_bus import Bus, Route, RouteData
+from aaata_bus.schema import RoutePoint
 from aaata_bus.visualization import load_route_data, plot_route_paths, trace_bus_paths
+from aaata_bus.visualization.route_paths import _detour_class, _detour_runs
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 START = datetime(2026, 10, 18, 15, 0)
 
@@ -47,3 +53,66 @@ def test_plot_route_paths_renders(tmp_path):
     out = tmp_path / "map.html"
     plot_route_paths(paths).save(out)
     assert "Route 22" in out.read_text()
+
+
+def test_plot_route_paths_draws_route_shapes_and_stops(tmp_path):
+    route = Route.from_api(json.loads((FIXTURES / "route_22.json").read_text()))
+    stop = next(stop for pattern in route.patterns for stop in pattern.stops)
+
+    out = tmp_path / "map.html"
+    plot_route_paths([], routes=[route]).save(out)
+    html = out.read_text()
+    assert "Route 22" in html
+    assert stop.stop_name in html
+    assert "detour" in html  # the fixture's route has an active detour
+
+    plot_route_paths([], routes=[route], show_stops=False).save(out)
+    assert stop.stop_name not in out.read_text()
+
+
+def test_detour_runs_are_not_joined():
+    # A detoured pattern is the full detour path followed by the full regular
+    # path; joining them would draw a line from the route's end back to its start.
+    points = [
+        RoutePoint(latitude=float(i), longitude=0.0, is_bypassed=d)
+        for i, d in enumerate([False, False, True, True])
+    ]
+    runs = _detour_runs(points)
+    assert [(d, [lat for lat, _ in c]) for d, c in runs] == [(False, [0, 1]), (True, [2, 3])]
+
+
+def test_fixture_detour_starts_back_at_route_start():
+    route = Route.from_api(json.loads((FIXTURES / "route_22.json").read_text()))
+    pattern = next(p for p in route.patterns if any(pt.is_bypassed for pt in p.points))
+    [(_, regular), (_, detour)] = _detour_runs(pattern.points)
+    assert detour[0] == regular[0] and detour[-1] == regular[-1]
+
+
+def test_plot_route_paths_tags_shapes_for_overlay_toggle(tmp_path):
+    route = Route.from_api(json.loads((FIXTURES / "route_22.json").read_text()))
+    paths = trace_bus_paths([snapshot(make_bus("561", 0, 42.1)), snapshot(make_bus("561", 5, 42.2))])
+    out = tmp_path / "map.html"
+    plot_route_paths(paths, routes=[route]).save(out)
+    html = out.read_text()
+    assert '"className": "route-shape"' in html
+    assert '"className": "bus-ping"' in html
+    assert "overlay-toggle" in html
+    # The fixture has an active detour, so both versions of that pattern are tagged.
+    assert '"className": "route-shape detour-path"' in html
+    assert '"className": "route-shape detour-regular"' in html
+    assert "Detours (uncheck" in html
+
+
+def test_plot_route_paths_omits_detour_toggle_without_detours(tmp_path):
+    paths = trace_bus_paths([snapshot(make_bus("561", 0, 42.1))])
+    out = tmp_path / "map.html"
+    plot_route_paths(paths).save(out)
+    assert "Detours (uncheck" not in out.read_text()
+
+
+def test_detour_class_treats_dtr_points_as_the_bypassed_regular_path():
+    # Checked against route 22: its `dtr: true` points are the usual route the
+    # detour avoids, and the `dtr: false` points are where buses actually go.
+    assert _detour_class(is_bypassed=False, pattern_detoured=True) == "detour-path"
+    assert _detour_class(is_bypassed=True, pattern_detoured=True) == "detour-regular"
+    assert _detour_class(is_bypassed=False, pattern_detoured=False) == ""

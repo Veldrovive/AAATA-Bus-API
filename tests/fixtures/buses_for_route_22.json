@@ -1,0 +1,58 @@
+{
+  "buses": {
+    "bus": [
+      {
+        "id": "466",
+        "consist": [],
+        "cars": [],
+        "rtpiFeedName": [],
+        "m": "1",
+        "rt": "22",
+        "rtRtpiFeedName": [],
+        "rtdd": "22",
+        "d": "North West Bound",
+        "dd": "TO BTC",
+        "dn": "NNW",
+        "lat": "42.297359466552734",
+        "lon": "-83.7203369140625",
+        "pid": "501321",
+        "pd": "TO BTC",
+        "pdRtpiFeedName": [],
+        "run": "1081",
+        "fs": "Pontiac - Dhu Varren to Blake Transit Center",
+        "op": "1619",
+        "dip": "2650",
+        "bid": "4402",
+        "wid1": "N/A",
+        "wid2": "01081",
+        "hidden": "false"
+      },
+      {
+        "id": "495",
+        "consist": [],
+        "cars": [],
+        "rtpiFeedName": [],
+        "m": "1",
+        "rt": "22",
+        "rtRtpiFeedName": [],
+        "rtdd": "22",
+        "d": "North East Bound",
+        "dd": "TO PPC",
+        "dn": "NE",
+        "lat": "42.2898014386495",
+        "lon": "-83.73838678995769",
+        "pid": "7599",
+        "pd": "TO PPC",
+        "pdRtpiFeedName": [],
+        "run": "1099",
+        "fs": "Pontiac - Dhu Varren to Pierpont Commons",
+        "op": "1735",
+        "dip": "6243",
+        "bid": "4202",
+        "wid1": "N/A",
+        "wid2": "01099",
+        "hidden": "false"
+      }
+    ]
+  }
+}

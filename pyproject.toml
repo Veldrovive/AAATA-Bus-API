@@ -12,8 +12,14 @@ dependencies = [
     "httpx>=0.28.1",
     "pydantic>=2.13.5",
     "pytest>=9.1.1",
+    "xyzservices>=2026.9.1",
 ]
 
 [build-system]
 requires = ["uv_build>=0.11.32,<0.12.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyrefly>=1.4.0",
+]

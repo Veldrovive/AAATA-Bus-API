@@ -31,6 +31,7 @@ async def courtesy_wait():
 
 async def save_route_data(client: httpx.AsyncClient, route_id: int, collect_predictions: bool):
     kind = "bus + prediction" if collect_predictions else "bus"
+    requested_at = datetime.now()
     try:
         busses = await get_buses_for_route_async(client, str(route_id))
         if busses is None:
@@ -54,6 +55,7 @@ async def save_route_data(client: httpx.AsyncClient, route_id: int, collect_pred
         buses=busses,
         predictions=predictions,
         predictions_collected=collect_predictions,
+        requested_at=requested_at,
     )
 
     with open(route_data_path, "a") as f:

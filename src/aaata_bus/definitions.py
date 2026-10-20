@@ -9,6 +9,13 @@ PREDICTIONS_FOR_BUS_URL = (
     "https://www.theride.org/api/ServiceData?method=predictionsforbus&vid={vehicle_id}"
 )
 
+ROUTE_BY_ID_URL = (
+    "https://www.theride.org/api/ServiceData?method=getroutebyid&routeid={route_id}"
+)
+
+#: Without a routeid this returns every bulletin; append "&routeid=..." to filter.
+SERVICE_BULLETINS_URL = "https://www.theride.org/api/ServiceData?method=getservicebulletins"
+
 DEFAULT_DATA_PATH = Path(__file__).parent.parent.parent / "dat"
 DATA_PATH = Path(os.getenv("AAATA_DATA_PATH", DEFAULT_DATA_PATH))
 def ensure_dat() -> Path:

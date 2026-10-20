@@ -11,6 +11,7 @@ services:
         "22",
         "63",
         "65",
+        "66",
         "--general-interval-minutes",
         "0.5",
         # Must be a whole multiple of --general-interval-minutes

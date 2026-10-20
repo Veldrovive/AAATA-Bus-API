@@ -49,26 +49,51 @@ uv run scripts/plot_route_paths.py                    # writes dat/route_paths.h
 uv run scripts/plot_route_paths.py --routes 22 --no-points --output route22.html
 ```
 
+On a remote machine, add `--serve` to host the map at `http://localhost:8000/route_paths.html` (or `--serve PORT`). VS Code Remote forwards the port automatically; over plain SSH, connect with `ssh -L 8000:localhost:8000 <host>` and open that URL locally.
+
 Each bus's sightings are joined into a polyline, colored by route, with one toggleable layer per route. A bus's line is broken when consecutive sightings are more than `--max-gap-minutes` apart (default 15).
+
+Beneath the bus lines, each route's scheduled path is drawn as a wide, faint line (with any active detour's path dashed) with its stops as small white circles; hover a stop for its name and ID. The script fetches these with `get_route`, one request per route in the data. Pass `--no-stops` to hide the stops, or `--no-route-shapes` to skip the fetch entirely (e.g. offline).
+
+A second control on the map, next to the route layers, has "Route paths & stops" and "Bus pings" checkboxes. They show or hide that kind of overlay on every route at once, so you can look at just the scheduled routes or just the bus sightings. When a route has an active detour, a "Detours" checkbox also appears. Checked, detoured routes show their detour path (dashed); unchecked, they show their regular path instead. Stops that are only on the hidden path are hidden with it.
 
 ### Python API
 
 You can use the `aaata_bus` package directly in Python:
 
 ```python
-from aaata_bus import get_buses_for_route, get_predictions_for_bus
+from aaata_bus import get_buses_for_route, get_predictions_for_bus, get_route, get_service_bulletins
 
 # Fetch buses currently running on a route
 buses = get_buses_for_route("22")
 if buses:
     for bus in buses:
-        print(f"Bus {bus.vehicle_id}: {bus.direction} to {bus.destination} (lat: {bus.latitude}, lon: {bus.longitude})")
+        print(f"Bus {bus.vehicle_id}: {bus.direction} {bus.direction_destination} (lat: {bus.latitude}, lon: {bus.longitude})")
 
         # Fetch arrival predictions for this bus
         predictions = get_predictions_for_bus(bus.vehicle_id)
         if predictions:
             for pred in predictions:
-                print(f"  Stop: {pred.stop_name} in {pred.estimate_time_minutes} min")
+                print(f"  Stop: {pred.stop_name} in {pred.countdown} min")
+
+# Fetch a route's description: name, colour, the path of each pattern with its
+# stops, plus any active detours and service bulletins
+route = get_route("22")
+print(route.name, route.color)
+for pattern in route.patterns:
+    print(f"Pattern {pattern.pattern_id} {pattern.direction}: {len(pattern.points)} points, {len(pattern.stops)} stops")
+for detour in route.detours:
+    print(f"Detour: {detour.description} ({detour.starts_at:%b %d} - {detour.ends_at:%b %d})")
+
+# A bus's pattern_id identifies the path it is currently following
+if buses:
+    current = route.pattern(buses[0].pattern_id)
+
+# Rider-facing service bulletins for a route (plus system-wide ones), or omit
+# the route id to get every bulletin
+for bulletin in get_service_bulletins("22"):
+    scope = "all routes" if bulletin.is_system_wide else ", ".join(bulletin.route_numbers)
+    print(f"[{bulletin.effect}] {bulletin.subject} ({scope})")
 ```
 
 ### Docker
@@ -120,8 +145,11 @@ docker run --rm -it aaata-bus:latest sh
 
 ## Testing
 
-Run tests with pytest:
+Type check with pyrefly (installed by `uv sync` as a dev dependency) and run tests with pytest:
 
 ```bash
+uv run pyrefly check
 uv run pytest
 ```
+
+`tests/test_api.py` runs offline against recorded responses in `tests/fixtures/`. `tests/test_api_live.py` calls the real TheRide API; when no buses are running (e.g. overnight) it emits a warning instead of failing.

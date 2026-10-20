@@ -3,6 +3,7 @@ import time
 import warnings
 from collections.abc import Iterable
 from datetime import datetime
+from typing import Any
 
 import httpx
 
@@ -30,9 +31,12 @@ def _parse_predictions_response(response: httpx.Response) -> list[BusPrediction]
     # convert to list of predictions
     return predictions_response.predictions
 
-def _parse_route_response(response: httpx.Response) -> Route:
+def _route_payload(response: httpx.Response) -> dict[str, Any]:
     response.raise_for_status()
-    return Route.from_api(response.json())
+    return response.json()
+
+def _parse_route_response(response: httpx.Response) -> Route:
+    return Route.from_api(_route_payload(response))
 
 def _parse_service_bulletins_response(response: httpx.Response) -> list[ServiceBulletin]:
     response.raise_for_status()
@@ -80,6 +84,10 @@ def get_route(route_id: str) -> Route:
     url = ROUTE_BY_ID_URL.format(route_id=route_id)
     return _parse_route_response(httpx.get(url))
 
+def get_route_payload(route_id: str) -> dict[str, Any]:
+    """The raw getroutebyid JSON for a route, unparsed (as saved in RouteVersion)."""
+    return _route_payload(httpx.get(ROUTE_BY_ID_URL.format(route_id=route_id)))
+
 def get_service_bulletins(route_id: str | None = None) -> list[ServiceBulletin]:
     """Get rider-facing service bulletins (detours, closures, notices).
 
@@ -106,6 +114,10 @@ async def get_route_async(client: httpx.AsyncClient, route_id: str) -> Route:
     """Async version of get_route using a shared client."""
     url = ROUTE_BY_ID_URL.format(route_id=route_id)
     return _parse_route_response(await client.get(url))
+
+async def get_route_payload_async(client: httpx.AsyncClient, route_id: str) -> dict[str, Any]:
+    """Async version of get_route_payload using a shared client."""
+    return _route_payload(await client.get(ROUTE_BY_ID_URL.format(route_id=route_id)))
 
 async def get_service_bulletins_async(
     client: httpx.AsyncClient, route_id: str | None = None

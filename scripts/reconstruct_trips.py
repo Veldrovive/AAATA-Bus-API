@@ -3,7 +3,8 @@ Splits collected bus pings into trips along their route patterns.
 
 Writes the tidy trip_pings table (one row per ping: trip key, UTC time, distance
 along the pattern before and after isotonic smoothing, vehicle, operator, run,
-block, pattern, and the trip ids joined from predictions) as CSV, and a
+block, pattern, the route version it was snapped to, and the trip ids joined
+from predictions) as CSV, and a
 time–distance chart of every trip.
 """
 import argparse
@@ -12,7 +13,7 @@ from collections import Counter
 from datetime import timedelta
 from pathlib import Path
 
-from aaata_bus import DATA_PATH, ensure_dat, get_routes, pattern_geometries
+from aaata_bus import DATA_PATH, ensure_dat
 from aaata_bus.geometry import DEFAULT_MAX_OFFSET_FT
 from aaata_bus.trips import (
     DEFAULT_MERGE_GAP,
@@ -23,6 +24,8 @@ from aaata_bus.trips import (
     reconstruct_trips,
     trip_pings_rows,
 )
+from aaata_bus.times import observation_time
+from aaata_bus.route_history import ROUTE_VERSIONS_FILE, load_route_history
 from aaata_bus.visualization import load_route_data, plot_trips
 from aaata_bus.visualization.data import DEFAULT_ROUTE_DATA_FILE
 from aaata_bus.visualization.serve import DEFAULT_SERVE_PORT, serve
@@ -74,6 +77,17 @@ def main():
         "--serve", nargs="?", type=int, const=DEFAULT_SERVE_PORT, metavar="PORT",
         help=f"After writing, serve the chart over HTTP (default port: {DEFAULT_SERVE_PORT})",
     )
+    parser.add_argument(
+        "--route-versions",
+        type=Path,
+        default=ROUTE_VERSIONS_FILE,
+        help=f"Saved route versions from the collector (default: {ROUTE_VERSIONS_FILE})",
+    )
+    parser.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help="Don't fetch routes that have no saved version (their pings are left out)",
+    )
     args = parser.parse_args()
     ensure_dat()
 
@@ -81,9 +95,11 @@ def main():
     if args.routes:
         wanted = set(args.routes)
         snapshots = [s for s in snapshots if s.route_id in wanted]
-    # Shapes are fetched live, so data collected under a different detour or
-    # service change won't line up.
-    geometries = pattern_geometries(get_routes(sorted({s.route_id for s in snapshots})))
+    # Each ping is snapped to the saved version of its route in effect when it
+    # was seen; routes with no saved version are fetched live.
+    geometries = load_route_history(
+        {s.route_id for s in snapshots}, args.route_versions, fetch_missing=not args.no_fetch
+    )
     trips = reconstruct_trips(
         snapshots,
         geometries,
@@ -102,7 +118,10 @@ def main():
     print(f"Wrote {len(rows):,} pings in {len(trips)} trips to {args.output}")
 
     sightings = sum(len(s.buses) for s in snapshots)
-    unknown = sum(1 for s in snapshots for b in s.buses if b.pattern_id not in geometries)
+    unknown = sum(
+        1 for s in snapshots for b in s.buses
+        if geometries.geometry(s.route_id, b.pattern_id, observation_time(s, b)) is None
+    )
     stale = sum(len(t.stale_pings) for t in trips)
     print(f"  {sightings:,} sightings: {unknown:,} on patterns with no path, "
           f"{sightings - unknown - len(rows) - stale:,} off the path, {stale:,} dropped as stale")
@@ -111,9 +130,11 @@ def main():
           f"{sum(len(t.trip_id_votes) > 1 for t in with_id)} had predictions pointing at more than one")
     per_route = Counter(t.route_id for t in trips)
     print("  trips per route: " + ", ".join(f"{r}: {n}" for r, n in sorted(per_route.items())))
+    per_version = Counter(t.route_version for t in trips)
+    print("  trips per route version: " + ", ".join(f"{v}: {n}" for v, n in sorted(per_version.items(), key=str)))
 
     if not args.no_plot:
-        plot_trips(trips, geometries).write_html(args.plot, include_plotlyjs=True)
+        plot_trips(trips).write_html(args.plot, include_plotlyjs=True)
         print(f"Wrote chart to {args.plot}")
         if args.serve is not None:
             serve(args.plot, args.serve)

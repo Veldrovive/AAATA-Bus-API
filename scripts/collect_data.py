@@ -5,22 +5,28 @@ import argparse
 import asyncio
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
+from pydantic import ValidationError
 
 from aaata_bus import (
     BusPrediction,
     RouteData,
     get_buses_for_route_async,
     get_predictions_for_bus_async,
+    get_route_payload_async,
     DATA_PATH,
     ensure_dat,
 )
+from aaata_bus.route_history import ROUTE_VERSIONS_FILE, RouteHistory, RouteVersion, save_route_version
 
 DEFAULT_BUS_ROUTES = [22, 63, 65]
 MINUTES_BETWEEN_GENERAL_SAVES = 0.5
 MINUTES_BETWEEN_PREDICTION_SAVES = 5
+#: Route shapes rarely change (detours, service changes), so check them hourly.
+#: A version is only written when it differs from the last saved one.
+MINUTES_BETWEEN_ROUTE_SAVES = 60
 COURTESY_WAIT_TIME_RANGE_S = (2, 5)
 
 route_data_path = DATA_PATH / "route_prediction_data.jsonl"
@@ -63,16 +69,49 @@ async def save_route_data(client: httpx.AsyncClient, route_id: int, collect_pred
     print(f"Saved {kind} data for route {route_id} at {datetime.now()}")
 
 
-async def collect(routes: list[int], bus_interval_s: float, loops_per_prediction: int):
+async def save_route_versions(client: httpx.AsyncClient, routes: list[int], history: RouteHistory):
+    """Fetch each route's description and save it if it changed since the last saved version."""
+    for i, route_id in enumerate(routes):
+        if i:
+            await courtesy_wait()
+        fetched_at = datetime.now(timezone.utc)
+        try:
+            payload = await get_route_payload_async(client, str(route_id))
+        except httpx.HTTPError as e:
+            print(f"Failed to fetch route {route_id}: {e!r}")
+            continue
+        version = RouteVersion.from_payload(str(route_id), payload, fetched_at)
+        try:
+            version.route
+        except ValidationError as e:
+            # Saved anyway: it's the raw payload, so it can be parsed once the schema catches up.
+            print(f"Warning: route {route_id} doesn't parse with the current schema: {e}")
+        if save_route_version(version, history, ROUTE_VERSIONS_FILE):
+            print(f"Saved new version {version.route_version} of route {route_id} at {datetime.now()}")
+        else:
+            print(f"Route {route_id} unchanged ({version.route_version})")
+
+
+async def collect(routes: list[int], bus_interval_s: float, loops_per_prediction: int, route_interval_s: float):
     # Keep references to running tasks so they aren't garbage collected mid-flight
     running_tasks: set[asyncio.Task] = set()
     # Prediction collection can outlast a prediction interval; never run two at once for a route
     prediction_tasks: dict[int, asyncio.Task] = {}
     loop_count = 0
+    # Loaded so a restart doesn't re-save versions that haven't changed.
+    route_history = RouteHistory.load(ROUTE_VERSIONS_FILE)
+    route_task: asyncio.Task | None = None
+    last_route_save = float("-inf")
 
     async with httpx.AsyncClient() as client:
         while True:
             loop_start = time.time()
+            if loop_start - last_route_save >= route_interval_s and (route_task is None or route_task.done()):
+                last_route_save = loop_start
+                route_task = asyncio.create_task(save_route_versions(client, routes, route_history))
+                running_tasks.add(route_task)
+                route_task.add_done_callback(running_tasks.discard)
+
             collect_predictions = loop_count % loops_per_prediction == 0
             loop_count += 1
 
@@ -121,6 +160,15 @@ def main():
             f"--general-interval-minutes (default: {MINUTES_BETWEEN_PREDICTION_SAVES})"
         ),
     )
+    parser.add_argument(
+        "--route-interval-minutes",
+        type=float,
+        default=MINUTES_BETWEEN_ROUTE_SAVES,
+        help=(
+            "Minutes between checks of each route's description (paths, stops, detours); "
+            f"a new version is saved only when it changed (default: {MINUTES_BETWEEN_ROUTE_SAVES})"
+        ),
+    )
     args = parser.parse_args()
 
     routes = args.routes
@@ -135,7 +183,7 @@ def main():
 
     ensure_dat()
 
-    asyncio.run(collect(routes, bus_interval_s, loops_per_prediction))
+    asyncio.run(collect(routes, bus_interval_s, loops_per_prediction, args.route_interval_minutes * 60))
 
 if __name__ == "__main__":
     main()

@@ -9,13 +9,16 @@ bus is off the path (detour, deadheading, GPS garbage).
 Stops sit on path vertices, so their distances along the pattern are exact.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from math import cos, radians
+from typing import Protocol
 
 import numpy as np
 
 from aaata_bus.schema import Bus, Route, RouteData, RoutePattern, RoutePoint
+from aaata_bus.times import observation_time
 
 #: Mean Earth radius (6,371,008.8 m) in feet.
 EARTH_RADIUS_FT = 20_902_259.0
@@ -60,10 +63,17 @@ class PatternGeometry:
 
     On a detoured pattern only the path buses actually take is used: the
     bypassed regular path (`RoutePoint.is_bypassed`) is dropped, unless
-    `use_bypassed` asks for the regular path instead.
+    `use_bypassed` asks for the regular path instead. `route_version` records
+    which saved `RouteVersion` the pattern came from.
     """
 
-    def __init__(self, route_id: str, pattern: RoutePattern, use_bypassed: bool = False) -> None:
+    def __init__(
+        self,
+        route_id: str,
+        pattern: RoutePattern,
+        use_bypassed: bool = False,
+        route_version: str | None = None,
+    ) -> None:
         detoured = any(point.is_bypassed for point in pattern.points)
         # Undetoured patterns have no bypassed points, so they always use all of them.
         points = [p for p in pattern.points if not detoured or p.is_bypassed == use_bypassed]
@@ -71,6 +81,8 @@ class PatternGeometry:
             raise ValueError(f"pattern {pattern.pattern_id} has fewer than two points")
 
         self.route_id = route_id
+        # Which saved route version (`RouteVersion.route_version`) this came from, if any.
+        self.route_version = route_version
         self.pattern_id = pattern.pattern_id
         self.direction = pattern.direction
         self._lat0 = points[0].latitude
@@ -285,6 +297,28 @@ def pattern_geometries(routes: Iterable[Route]) -> dict[str, PatternGeometry]:
     return geometries
 
 
+class GeometrySource(Protocol):
+    """Looks up the geometry a sighting should be projected onto, e.g. a
+    `RouteHistory` of saved route versions."""
+
+    def geometry(self, route_id: str, pattern_id: str, t: datetime) -> PatternGeometry | None: ...
+
+
+#: Either fixed geometries keyed by pattern id (from `pattern_geometries`), used
+#: for every sighting, or a source that picks one by route, pattern and time.
+Geometries = Mapping[str, PatternGeometry] | GeometrySource
+
+GeometryLookup = Callable[[str, str, datetime], PatternGeometry | None]
+
+
+def geometry_lookup(geometries: Geometries) -> GeometryLookup:
+    """`(route_id, pattern_id, t) -> PatternGeometry | None` for either kind of `Geometries`."""
+    if isinstance(geometries, Mapping):
+        fixed = geometries
+        return lambda route_id, pattern_id, t: fixed.get(pattern_id)
+    return geometries.geometry
+
+
 @dataclass(frozen=True)
 class SnappedPing:
     """A bus sighting located on its pattern."""
@@ -292,6 +326,7 @@ class SnappedPing:
     bus: Bus
     projection: Projection | None  # None when the pattern's geometry is unknown
     max_offset_ft: float
+    geometry: PatternGeometry | None = None  # what it was projected onto
 
     @property
     def on_route(self) -> bool:
@@ -300,28 +335,30 @@ class SnappedPing:
 
 def snap_sightings(
     sightings: Sequence[Bus],
-    geometries: dict[str, PatternGeometry],
+    geometries: Geometries,
     max_offset_ft: float = DEFAULT_MAX_OFFSET_FT,
 ) -> list[SnappedPing]:
     """Project one bus's time-ordered sightings onto their patterns.
 
     Each sighting is projected near the previous on-route one on the same
-    pattern, so a bus is tracked through loops rather than jumping to whichever
-    pass of the path is nearest.
+    pattern geometry, so a bus is tracked through loops rather than jumping to
+    whichever pass of the path is nearest. With a `GeometrySource`, sightings
+    are looked up by `Bus.route_number` and `Bus.timestamp`.
     """
+    lookup = geometry_lookup(geometries)
     snapped = []
-    last: tuple[str, float] | None = None  # (pattern_id, dist_along_ft)
+    last: tuple[PatternGeometry, float] | None = None  # (geometry, dist_along_ft)
     for bus in sightings:
-        geometry = geometries.get(bus.pattern_id)
+        geometry = lookup(bus.route_number, bus.pattern_id, bus.timestamp)
         if geometry is None:
             snapped.append(SnappedPing(bus, None, max_offset_ft))
             continue
-        near = last[1] if last is not None and last[0] == bus.pattern_id else None
+        near = last[1] if last is not None and last[0] is geometry else None
         ping = SnappedPing(
-            bus, geometry.project(bus.latitude, bus.longitude, near, max_offset_ft), max_offset_ft
+            bus, geometry.project(bus.latitude, bus.longitude, near, max_offset_ft), max_offset_ft, geometry
         )
         if ping.on_route and ping.projection is not None:
-            last = (bus.pattern_id, ping.projection.dist_along_ft)
+            last = (geometry, ping.projection.dist_along_ft)
         snapped.append(ping)
     return snapped
 
@@ -332,6 +369,7 @@ class StopDistanceCheck:
 
     vehicle_id: str
     pattern_id: str
+    route_version: str | None  # the saved route version the geometry came from
     stop_id: str
     reported_ft: float  # BusPrediction.distance_to_stop_ft
     projected_ft: float  # stop's distance along the pattern minus the bus's
@@ -344,7 +382,7 @@ class StopDistanceCheck:
 
 def check_stop_distances(
     snapshots: Iterable[RouteData],
-    geometries: dict[str, PatternGeometry],
+    geometries: Geometries,
     max_offset_ft: float = DEFAULT_MAX_OFFSET_FT,
 ) -> list[StopDistanceCheck]:
     """Compare each prediction's `distance_to_stop_ft` with our linear referencing.
@@ -353,12 +391,14 @@ def check_stop_distances(
     position its nearest predicted stop implies (stop distance minus reported
     distance), which disambiguates loops. Predicted stops that aren't on the
     bus's pattern are skipped. Where a stop is visited twice, the visit at or
-    beyond the bus is used.
+    beyond the bus is used. With a `GeometrySource`, each bus uses the route
+    version in effect when it was seen.
     """
+    lookup = geometry_lookup(geometries)
     checks = []
     for snapshot in snapshots:
         for bus in snapshot.buses:
-            geometry = geometries.get(bus.pattern_id)
+            geometry = lookup(snapshot.route_id, bus.pattern_id, observation_time(snapshot, bus))
             predictions = snapshot.predictions.get(bus.vehicle_id, [])
             if geometry is None or not predictions:
                 continue
@@ -378,6 +418,7 @@ def check_stop_distances(
                 checks.append(StopDistanceCheck(
                     vehicle_id=bus.vehicle_id,
                     pattern_id=bus.pattern_id,
+                    route_version=geometry.route_version,
                     stop_id=prediction.stop_id,
                     reported_ft=prediction.distance_to_stop_ft,
                     projected_ft=min(ahead) - projection.dist_along_ft,

@@ -1,13 +1,12 @@
 """Time–distance ("Marey") charts of reconstructed trips."""
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from aaata_bus.geometry import PatternGeometry
 from aaata_bus.trips import Trip, TripPing
 from aaata_bus.visualization.route_paths import ROUTE_COLORS, _route_sort_key
 
@@ -41,8 +40,9 @@ HOVER_TEMPLATE = (
 )
 
 
-def plot_trips(trips: list[Trip], geometries: dict[str, PatternGeometry]) -> go.Figure:
-    """One panel per pattern: each trip's distance along the pattern over time.
+def plot_trips(trips: list[Trip]) -> go.Figure:
+    """One panel per pattern (and route version, if a pattern has several):
+    each trip's distance along the pattern over time.
 
     Lines are the isotonic (non-decreasing) fit, dots the raw projected pings it
     was fit to, and hollow circles the stale repeated pings that were dropped.
@@ -50,29 +50,33 @@ def plot_trips(trips: list[Trip], geometries: dict[str, PatternGeometry]) -> go.
     the same order as the route map.
 
     Args:
-        trips: From `reconstruct_trips`.
-        geometries: The geometries the trips were reconstructed with, for
-            pattern lengths and stops.
+        trips: From `reconstruct_trips`; each trip's geometry gives the
+            pattern's length and stops.
     """
-    by_pattern: dict[str, list[Trip]] = defaultdict(list)
+    by_pattern: dict[tuple[str, str | None], list[Trip]] = defaultdict(list)
     for trip in trips:
-        by_pattern[trip.pattern_id].append(trip)
+        by_pattern[(trip.pattern_id, trip.route_version)].append(trip)
+    versions_per_pattern = Counter(pattern_id for pattern_id, _ in by_pattern)
     route_ids = sorted({trip.route_id for trip in trips}, key=_route_sort_key)
     colors = {route_id: ROUTE_COLORS[i % len(ROUTE_COLORS)] for i, route_id in enumerate(route_ids)}
-    pattern_ids = sorted(
-        by_pattern, key=lambda p: (_route_sort_key(by_pattern[p][0].route_id), p)
+    panels = sorted(
+        by_pattern,
+        key=lambda k: (_route_sort_key(by_pattern[k][0].route_id), k[0], by_pattern[k][0].start),
     )
 
     titles = []
-    for pattern_id in pattern_ids:
-        geometry = geometries.get(pattern_id)
-        route_id = by_pattern[pattern_id][0].route_id
-        direction = f" {geometry.direction}" if geometry else ""
-        titles.append(f"Route {route_id}{direction} · pattern {pattern_id} · {len(by_pattern[pattern_id])} trips")
+    for key in panels:
+        pattern_id, route_version = key
+        first = by_pattern[key][0]
+        direction = f" {first.geometry.direction}" if first.geometry else ""
+        version = f" · version {route_version}" if versions_per_pattern[pattern_id] > 1 else ""
+        titles.append(
+            f"Route {first.route_id}{direction} · pattern {pattern_id}{version} · {len(by_pattern[key])} trips"
+        )
 
     fig = make_subplots(
-        rows=max(len(pattern_ids), 1), cols=1, shared_xaxes=True,
-        vertical_spacing=min(0.25 / max(len(pattern_ids), 1), 0.06), subplot_titles=titles,
+        rows=max(len(panels), 1), cols=1, shared_xaxes=True,
+        vertical_spacing=min(0.25 / max(len(panels), 1), 0.06), subplot_titles=titles,
     )
     shown_legend: set[str] = set()
 
@@ -81,8 +85,8 @@ def plot_trips(trips: list[Trip], geometries: dict[str, PatternGeometry]) -> go.
         shown_legend.add(name)
         return {"name": name, "legendgroup": name, "showlegend": first}
 
-    for row, pattern_id in enumerate(pattern_ids, start=1):
-        pattern_trips = sorted(by_pattern[pattern_id], key=lambda t: t.start)
+    for row, key in enumerate(panels, start=1):
+        pattern_trips = sorted(by_pattern[key], key=lambda t: t.start)
         color = colors[pattern_trips[0].route_id]
 
         # One trace per kind per panel; None breaks the line between trips.
@@ -107,7 +111,7 @@ def plot_trips(trips: list[Trip], geometries: dict[str, PatternGeometry]) -> go.
                 stale_y.append(ping.raw_dist_ft)
                 stale_data.append(_hover(trip, ping))
 
-        geometry = geometries.get(pattern_id)
+        geometry = pattern_trips[0].geometry
         if geometry is not None:
             # Added first so they draw beneath the trips. One trace of
             # None-separated segments, since add_hline per stop is very slow.
@@ -138,18 +142,18 @@ def plot_trips(trips: list[Trip], geometries: dict[str, PatternGeometry]) -> go.
                 hovertemplate=HOVER_TEMPLATE, **legend("Dropped stale pings"),
             ), row=row, col=1)
 
-        geometry = geometries.get(pattern_id)
+        geometry = pattern_trips[0].geometry
         if geometry is not None:
             fig.update_yaxes(range=[-0.02 * geometry.length_ft, 1.02 * geometry.length_ft], row=row, col=1)
         fig.update_yaxes(title_text="ft along pattern", row=row, col=1)
 
-    fig.update_xaxes(title_text="Time (Ann Arbor)", row=max(len(pattern_ids), 1), col=1)
+    fig.update_xaxes(title_text="Time (Ann Arbor)", row=max(len(panels), 1), col=1)
     fig.update_xaxes(showgrid=False, linecolor=INK_MUTED, tickfont={"color": INK_MUTED})
     fig.update_yaxes(showgrid=False, zeroline=False, tickformat=",", tickfont={"color": INK_MUTED})
     fig.update_layout(
         template="plotly_white",
         title="Reconstructed trips: distance along pattern over time",
-        height=PANEL_HEIGHT_PX * max(len(pattern_ids), 1) + 160,
+        height=PANEL_HEIGHT_PX * max(len(panels), 1) + 160,
         hovermode="closest",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.0, "x": 0, "yref": "container"},
         margin={"t": 110},

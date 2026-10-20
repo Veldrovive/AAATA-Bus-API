@@ -7,7 +7,7 @@ import folium
 from branca.element import MacroElement, Template
 from xyzservices import providers
 
-from aaata_bus.geometry import DEFAULT_MAX_OFFSET_FT, PatternGeometry, pattern_geometries, snap_sightings
+from aaata_bus.geometry import DEFAULT_MAX_OFFSET_FT, Geometries, pattern_geometries, snap_sightings
 from aaata_bus.schema import Bus, Route, RoutePattern, RoutePoint
 from aaata_bus.visualization.data import BusPath
 
@@ -164,7 +164,7 @@ def _add_ping(
 
 def _add_snapped_pings(
     path: BusPath,
-    geometries: dict[str, PatternGeometry],
+    geometries: Geometries,
     color: str,
     layer: folium.FeatureGroup,
     max_offset_ft: float,
@@ -276,6 +276,7 @@ def plot_route_paths(
     show_stops: bool = True,
     ping_view: PingView = "raw",
     max_offset_ft: float = DEFAULT_MAX_OFFSET_FT,
+    geometries: Geometries | None = None,
 ) -> folium.Map:
     """Draw each bus path as a polyline, colored and layered by route.
 
@@ -291,6 +292,9 @@ def plot_route_paths(
             Pings further than `max_offset_ft` from their path, or on a pattern
             not in `routes`, are drawn hollow at their raw position when snapped.
         max_offset_ft: How far from its path a ping can be and still snap.
+        geometries: What to snap pings onto, e.g. a `RouteHistory` so each is
+            snapped to the route version in effect when it was seen. Defaults
+            to the patterns of `routes`.
 
     Returns:
         A folium map with one toggleable layer per route, plus a control that
@@ -315,7 +319,8 @@ def plot_route_paths(
         by_route[path.route_id].append(path)
 
     shapes = {route.route_id: route for route in routes or []}
-    geometries = pattern_geometries(shapes.values())
+    if geometries is None and shapes:
+        geometries = pattern_geometries(shapes.values())
 
     route_ids = sorted(by_route.keys() | shapes.keys(), key=_route_sort_key)
     for i, route_id in enumerate(route_ids):
@@ -324,7 +329,7 @@ def plot_route_paths(
         if route_id in shapes:
             _add_route_shape(shapes[route_id], color, layer, show_stops)
         for path in by_route[route_id]:
-            raw_class = f"{BUS_PING_CLASS} {PING_RAW_CLASS}" if geometries else BUS_PING_CLASS
+            raw_class = f"{BUS_PING_CLASS} {PING_RAW_CLASS}" if geometries is not None else BUS_PING_CLASS
             if len(path.sightings) > 1:
                 folium.PolyLine(
                     path.coordinates,
@@ -337,7 +342,7 @@ def plot_route_paths(
             if show_points or len(path.sightings) == 1:
                 for bus in path.sightings:
                     _add_ping(layer, (bus.latitude, bus.longitude), color, raw_class, _ping_tooltip(path, bus))
-            if geometries:
+            if geometries is not None:
                 _add_snapped_pings(path, geometries, color, layer, max_offset_ft)
         layer.add_to(fmap)
 
@@ -354,7 +359,7 @@ def plot_route_paths(
     folium.LayerControl(collapsed=False).add_to(fmap)
     _OverlayToggle(
         has_detours=any(_is_detoured(p) for route in shapes.values() for p in route.patterns),
-        has_snapped=bool(geometries) and bool(paths),
+        has_snapped=geometries is not None and bool(paths),
         ping_view=ping_view,
     ).add_to(fmap)
     return fmap

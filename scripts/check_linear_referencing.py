@@ -17,8 +17,9 @@ from collections import defaultdict
 from pathlib import Path
 from statistics import median
 
-from aaata_bus import check_stop_distances, get_routes, pattern_geometries
-from aaata_bus.geometry import DEFAULT_MAX_OFFSET_FT, PatternGeometry, StopDistanceCheck, snap_sightings
+from aaata_bus import check_stop_distances
+from aaata_bus.geometry import DEFAULT_MAX_OFFSET_FT, Geometries, StopDistanceCheck, snap_sightings
+from aaata_bus.route_history import ROUTE_VERSIONS_FILE, load_route_history
 from aaata_bus.visualization import load_route_data, trace_bus_paths
 from aaata_bus.visualization.data import DEFAULT_ROUTE_DATA_FILE
 
@@ -46,15 +47,28 @@ def main():
         default=DEFAULT_MAX_OFFSET_FT,
         help=f"Reject pings further than this from their path (default: {DEFAULT_MAX_OFFSET_FT:g})",
     )
+    parser.add_argument(
+        "--route-versions",
+        type=Path,
+        default=ROUTE_VERSIONS_FILE,
+        help=f"Saved route versions from the collector (default: {ROUTE_VERSIONS_FILE})",
+    )
+    parser.add_argument(
+        "--no-fetch",
+        action="store_true",
+        help="Don't fetch routes that have no saved version (their pings are left out)",
+    )
     args = parser.parse_args()
 
     snapshots = load_route_data(args.input)
     if args.routes:
         wanted = set(args.routes)
         snapshots = [s for s in snapshots if s.route_id in wanted]
-    # Shapes are fetched live, so data collected under a different detour or
-    # service change won't line up.
-    geometries = pattern_geometries(get_routes(sorted({s.route_id for s in snapshots})))
+    # Each ping is snapped to the saved version of its route in effect when it
+    # was seen; routes with no saved version are fetched live.
+    geometries = load_route_history(
+        {s.route_id for s in snapshots}, args.route_versions, fetch_missing=not args.no_fetch
+    )
 
     report_offsets(snapshots, geometries, args.max_offset_ft)
 
@@ -86,7 +100,7 @@ def main():
     print(f"  {'':>8}  {percentiles(geometry)}")
 
 
-def report_offsets(snapshots, geometries: dict[str, PatternGeometry], max_offset_ft: float) -> None:
+def report_offsets(snapshots, geometries: Geometries, max_offset_ft: float) -> None:
     offsets: dict[str, list[float]] = defaultdict(list)
     unknown = 0
     for path in trace_bus_paths(snapshots):

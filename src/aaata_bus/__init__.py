@@ -26,6 +26,14 @@ from aaata_bus.api import (
     get_service_bulletins,
     get_service_bulletins_async,
     get_routes,
+    get_route_payload,
+    get_route_payload_async,
+)
+
+from aaata_bus.route_history import (
+    RouteHistory,
+    RouteVersion,
+    save_route_version,
 )
 
 from aaata_bus.geometry import (
@@ -80,6 +88,11 @@ __all__ = [
     "get_service_bulletins",
     "get_service_bulletins_async",
     "get_routes",
+    "get_route_payload",
+    "get_route_payload_async",
+    "RouteHistory",
+    "RouteVersion",
+    "save_route_version",
     "PatternGeometry",
     "Projection",
     "SnappedPing",

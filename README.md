@@ -34,6 +34,8 @@ Run with default settings (routes 22, 63, 65; bus locations every 30 seconds, pr
 uv run scripts/collect_data.py
 ```
 
+The collector also checks each route's description (pattern paths, stops, detours, bulletins) at startup and then hourly, and appends it to `dat/route_versions.jsonl` only when it changed since the last saved version. Each line has the raw `getroutebyid` response, its fetch time, and a `route_version` id derived from its content. The analysis scripts snap each ping to the version that was in effect when it was seen. The match uses the bus's route and pattern id, then time: the latest version fetched at or before the ping, or, for pings older than every saved version, the earliest. Routes with no saved version are fetched live (pass `--no-fetch` to skip them). Change the interval with `--route-interval-minutes`.
+
 Run with custom routes and polling intervals. The prediction interval must be a whole multiple of the general interval; snapshots taken between prediction loops have empty `predictions` and `predictions_collected: false`:
 
 ```bash
@@ -53,7 +55,7 @@ On a remote machine, add `--serve` to host the map at `http://localhost:8000/rou
 
 Each bus's sightings are joined into a polyline, colored by route, with one toggleable layer per route. A bus's line is broken when consecutive sightings are more than `--max-gap-minutes` apart (default 15).
 
-Beneath the bus lines, each route's scheduled path is drawn as a wide, faint line (with any active detour's path dashed) with its stops as small white circles; hover a stop for its name and ID. The script fetches these with `get_route`, one request per route in the data. Pass `--no-stops` to hide the stops, or `--no-route-shapes` to skip the fetch entirely (e.g. offline).
+Beneath the bus lines, each route's scheduled path is drawn as a wide, faint line (with any active detour's path dashed) with its stops as small white circles; hover a stop for its name and ID. Each route is drawn as its latest saved version, and is fetched live if it has none. Pass `--no-stops` to hide the stops, or `--no-route-shapes` to skip the fetch entirely (e.g. offline).
 
 A second control on the map, next to the route layers, has "Route paths & stops" and "Bus pings" checkboxes. They show or hide that kind of overlay on every route at once, so you can look at just the scheduled routes or just the bus sightings. When a route has an active detour, a "Detours" checkbox also appears. Checked, detoured routes show their detour path (dashed); unchecked, they show their regular path instead. Stops that are only on the hidden path are hidden with it.
 
@@ -85,7 +87,7 @@ uv run scripts/reconstruct_trips.py            # writes dat/trip_pings.csv and d
 uv run scripts/reconstruct_trips.py --routes 22 --serve
 ```
 
-`trip_pings.csv` has one row per ping: `trip_key`, UTC time `t`, `dist_ft` (smoothed) and `raw_dist_ft`, `offset_ft`, `is_repeat` (same position as the previous poll), the vehicle, operator, run and block, the pattern, and the joined `trip_id`, `scheduled_trip_id`, `service_date` and `trip_start_seconds`. `trips.html` is a time–distance chart with one panel per pattern. Each trip's smoothed curve is a line, raw pings are dots, dropped stale pings are hollow circles, and stops are faint horizontal lines. Hover for details. In Python, use `reconstruct_trips(snapshots, pattern_geometries(routes))`.
+`trip_pings.csv` has one row per ping: `trip_key`, UTC time `t`, `dist_ft` (smoothed) and `raw_dist_ft`, `offset_ft`, `is_repeat` (same position as the previous poll), the vehicle, operator, run and block, the pattern and the `route_version` it was snapped to, and the joined `trip_id`, `scheduled_trip_id`, `service_date` and `trip_start_seconds`. `trips.html` is a time–distance chart with one panel per pattern. Each trip's smoothed curve is a line, raw pings are dots, dropped stale pings are hollow circles, and stops are faint horizontal lines. Hover for details. In Python, use `reconstruct_trips(snapshots, RouteHistory.load())` (or `load_route_history(route_ids)` to fill in missing routes live, or `pattern_geometries(routes)` for fixed shapes).
 
 To check the linear referencing against TheRide's own `distance_to_stop_ft` in the collected predictions:
 

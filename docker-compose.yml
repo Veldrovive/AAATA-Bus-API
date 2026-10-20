@@ -17,6 +17,9 @@ services:
         # Must be a whole multiple of --general-interval-minutes
         "--prediction-interval-minutes",
         "5",
+        # Route paths/stops/detours are saved only when they change
+        "--route-interval-minutes",
+        "60",
       ]
     volumes:
       # Mount host ./dat to /app/dat so data persists across container restarts

@@ -35,6 +35,16 @@ arrival-time modelling built on the collected data.
     time-ordered pings, each near the last (`SnappedPing.on_route` is false past
     `max_offset_ft`, default 150). `check_stop_distances` compares our distances with
     each prediction's `distance_to_stop_ft`.
+  - `route_history.py` — saved route versions. `RouteVersion` is one raw `getroutebyid`
+    payload plus `route_version` (`<route_id>-<sha256[:12]>` of the canonical JSON, so
+    identical content gets the same id) and an aware-UTC `fetched_at`.
+    `save_route_version` appends to `dat/route_versions.jsonl` only if the content differs
+    from that route's latest saved version. `RouteHistory` implements
+    `geometry.GeometrySource`. A bus has no route-version field (`pid` is the only link),
+    so `version_at` takes the versions of the route that contain the pattern, then the
+    latest fetched at or before the sighting, else the earliest.
+    `load_route_history` adds in-memory live fetches for routes with no saved version.
+  - `times.py` — `to_utc` and `observation_time` for the collector's naive timestamps.
   - `trips.py` — trip reconstruction. `reconstruct_trips` splits each vehicle's pings
     (timed by `requested_at`, as aware UTC) into `Trip`s: new trip on a pattern change,
     a gap over `max_gap` (10 min), or distance falling `reset_ft` (1000 ft) below the
@@ -44,7 +54,11 @@ arrival-time modelling built on the collected data.
     the next move is faster than `stale_speed_ftps` (80 ft/s), in which case they go into
     `stale_pings`. `dist_ft` is the isotonic fit of `raw_dist_ft`. `trip_id` is the
     majority vote of the nearest-stop prediction's `trip_id` (only stops on the pattern
-    count). `trip_pings_rows` gives the tidy `trip_pings` table.
+    count). Each trip records its `route_version` and `geometry`, and a trip never spans
+    two versions. `trip_pings_rows` gives the tidy `trip_pings` table.
+  - Anything that snaps (`reconstruct_trips`, `check_stop_distances`, `snap_sightings`,
+    `plot_route_paths`) takes `Geometries`: either a fixed `{pattern_id: PatternGeometry}`
+    from `pattern_geometries`, or a `GeometrySource` such as `RouteHistory`.
   - `route.py` — stub `BusRoute` class, not yet used.
   - `visualization/` — `data.py` loads `RouteData` and traces per-bus `BusPath`s;
     `route_paths.py` renders them as a folium map, optionally drawing `Route` shapes
@@ -74,7 +88,8 @@ arrival-time modelling built on the collected data.
   responses in `tests/fixtures/` (`route_22.json` has an active detour, so it exercises
   the single-object quirk for detours and bulletins). `test_api_live.py` hits the real TheRide API (needs
   network); it warns instead of failing when no buses are running, e.g. overnight.
-- `dat/` — collected data (gitignored). Main file: `dat/route_prediction_data.jsonl`.
+- `dat/` — collected data (gitignored). Main file: `dat/route_prediction_data.jsonl`;
+  route versions in `dat/route_versions.jsonl`.
 - `Dockerfile`, `docker-compose.yml`, `docker-entrypoint.sh` — containerized collector.
 
 ## Workflow
@@ -126,9 +141,10 @@ returning payloads from `tests/fixtures/`. Live tests must tolerate an empty sys
   than theirs, probably because their internal shape differs from the drawn one.
   Separately, the agency's distances often put the bus a few hundred feet ahead of its
   `busesforroute` position (the per-bus term in the check script).
-- **Route shapes are fetched live**, not stored with the data, so data collected under
-  a different detour or service change may not snap. Patterns change with detours (route
-  22's detour pattern is `501321`).
+- **Route versions are only as fine as the check interval:** a change happens at some
+  point between two saved fetches. Data from before routes were saved (before
+  2026-10-20) falls back to the earliest version, i.e. a live fetch. Patterns change with
+  detours (route 22's detour pattern is `501321`).
 - Predictions for a bus run on into its next trip (usually on another pattern), so
   filter by `trip_id` before comparing them with the current pattern.
 - **Timezones:** `requested_at` and `Bus.timestamp` are naive on the collector's clock
@@ -144,6 +160,15 @@ returning payloads from `tests/fixtures/`. Live tests must tolerate an empty sys
   API provides no fix time.
 - **Be polite to the API:** the collector uses a random courtesy wait between requests.
   Keep it; don't add tight polling loops.
+- The collector checks each route's description every `--route-interval-minutes` (60),
+  starting at startup, and loads the existing versions file first so a restart doesn't
+  re-save. The payload has no volatile fields, but **the order of patterns varies between
+  fetches** (route 66 flips two), so `payload_hash` hashes `canonical_payload`: patterns
+  and detours sorted by id, bulletins by content, points left in order. Any real change
+  (path, stops, detour, bulletin text) still makes a new version. `save_route_version`
+  recomputes the latest saved version's hash instead of trusting the stored
+  `content_hash`, so lines saved under the old raw-order hash still compare correctly. Scripts snap to saved
+  versions and only fetch live for routes with none saved (`--no-fetch` disables that).
 - The prediction polling interval must be a whole multiple of the general (bus location)
   interval. Location-only snapshots have empty `predictions` and
   `predictions_collected: false`.

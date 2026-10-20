@@ -12,11 +12,10 @@ from aaata_bus.schema import Bus, BusPrediction, RoutePattern, RoutePoint, Route
 from aaata_bus.trips import (
     TRIP_PING_COLUMNS,
     isotonic_fit,
-    observation_time,
     reconstruct_trips,
-    to_utc,
     trip_pings_rows,
 )
+from aaata_bus.times import observation_time, to_utc
 from aaata_bus.visualization import plot_trips
 
 LAT0, LON0 = 42.28, -83.74
@@ -225,7 +224,7 @@ def test_trip_pings_rows():
 def test_plot_trips_renders(tmp_path):
     trips = reconstruct_trips(run(1500, 2000, 2000, 2000, 6000) + run(0, 3000, pattern_id="W", t0=300), GEOMETRIES)
     out = tmp_path / "trips.html"
-    plot_trips(trips, GEOMETRIES).write_html(out, include_plotlyjs=False)
+    plot_trips(trips).write_html(out, include_plotlyjs=False)
     html = out.read_text()
     assert "pattern E" in html and "pattern W" in html
     for name in ("Isotonic fit", "Raw pings", "Dropped stale pings", "Stops"):

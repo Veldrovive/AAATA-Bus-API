@@ -17,8 +17,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any
 
-from aaata_bus.geometry import DEFAULT_MAX_OFFSET_FT, PatternGeometry
+from aaata_bus.geometry import DEFAULT_MAX_OFFSET_FT, Geometries, PatternGeometry, geometry_lookup
 from aaata_bus.schema import Bus, BusPrediction, RouteData
+from aaata_bus.times import observation_time
 
 #: A vehicle unseen for longer than this starts a new trip.
 DEFAULT_TRIP_GAP = timedelta(minutes=10)
@@ -59,6 +60,11 @@ class Trip:
     route_id: str
     vehicle_id: str
     pattern_id: str
+    # The saved route version (`RouteVersion.route_version`) whose geometry the
+    # trip was snapped to; None with fixed geometries from `pattern_geometries`.
+    route_version: str | None = None
+    # The pattern geometry the trip was snapped to (pattern length, stops).
+    geometry: PatternGeometry | None = field(default=None, repr=False, compare=False)
     pings: list[TripPing] = field(default_factory=list)
     # Pings dropped because they repeated a position the bus must have left
     # (see `DEFAULT_STALE_SPEED_FTPS`).
@@ -91,19 +97,6 @@ class Trip:
         """The real-time trip id (`BusPrediction.trip_id`) most predictions
         during this trip were for; None when no predictions were collected."""
         return self.trip_id_votes.most_common(1)[0][0] if self.trip_id_votes else None
-
-
-def to_utc(value: datetime, naive_tz: tzinfo = timezone.utc) -> datetime:
-    """Make `value` aware UTC, reading naive datetimes as `naive_tz`."""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=naive_tz)
-    return value.astimezone(timezone.utc)
-
-
-def observation_time(snapshot: RouteData, bus: Bus, naive_tz: tzinfo = timezone.utc) -> datetime:
-    """When a sighting was made: the snapshot's request time, or for data saved
-    before `requested_at` existed, the bus's (local, post-response) timestamp."""
-    return to_utc(snapshot.requested_at or bus.timestamp, naive_tz)
 
 
 def isotonic_fit(values: Sequence[float]) -> list[float]:
@@ -188,6 +181,7 @@ def _continues(first: Trip, second: Trip, merge_gap: timedelta, reset_ft: float)
     return (
         first.vehicle_id == second.vehicle_id
         and first.pattern_id == second.pattern_id
+        and first.route_version == second.route_version
         and second.start - first.end <= merge_gap
         and second.pings[0].raw_dist_ft >= max(p.raw_dist_ft for p in first.pings) - reset_ft
         and (first.trip_id is None or second.trip_id is None or first.trip_id == second.trip_id)
@@ -217,7 +211,7 @@ def _finish(trip: Trip, stale_speed_ftps: float) -> Trip:
 
 def reconstruct_trips(
     snapshots: Iterable[RouteData],
-    geometries: dict[str, PatternGeometry],
+    geometries: Geometries,
     max_gap: timedelta = DEFAULT_TRIP_GAP,
     merge_gap: timedelta = DEFAULT_MERGE_GAP,
     reset_ft: float = DEFAULT_RESET_FT,
@@ -227,13 +221,16 @@ def reconstruct_trips(
 ) -> list[Trip]:
     """Split every vehicle's pings into trips along their patterns.
 
-    Pings on patterns without a geometry, or further than `max_offset_ft` from
+    Pings on patterns without a geometry (at that time), or further than `max_offset_ft` from
     the path (deadheading, unmapped detours, GPS garbage), are left out; they
     don't end a trip by themselves.
 
     Args:
         snapshots: Collected snapshots, in any order.
-        geometries: From `pattern_geometries`, keyed by pattern id.
+        geometries: Either a `RouteHistory` of saved route versions, so each
+            ping is snapped to the version in effect when it was seen, or
+            fixed geometries from `pattern_geometries`, keyed by pattern id.
+            A trip never spans two route versions.
         max_gap: Start a new trip after a vehicle goes unseen this long.
         merge_gap: Afterwards, rejoin consecutive trips on the same pattern
             split by a gap up to this long, if the later one carries on
@@ -248,6 +245,7 @@ def reconstruct_trips(
     Returns:
         Trips with at least one ping, sorted by vehicle then start time.
     """
+    lookup = geometry_lookup(geometries)
     pieces: list[Trip] = []
     for vehicle_id, sightings in sorted(_vehicle_sightings(snapshots, naive_tz).items()):
         trip: Trip | None = None
@@ -267,13 +265,14 @@ def reconstruct_trips(
                 last is not None and (last.bus.latitude, last.bus.longitude) == (bus.latitude, bus.longitude)
             )
             last = sighting
-            geometry = geometries.get(bus.pattern_id)
+            geometry = lookup(sighting.route_id, bus.pattern_id, sighting.t)
             if geometry is None:
                 continue
 
             continues = (
                 trip is not None
                 and trip.pattern_id == bus.pattern_id
+                and trip.geometry is geometry
                 and last_on_route is not None
                 and sighting.t - last_on_route <= max_gap
             )
@@ -288,7 +287,7 @@ def reconstruct_trips(
                 projection = geometry.project(bus.latitude, bus.longitude, 0.0, max_offset_ft)
             if not continues:
                 close()
-                trip = Trip(sighting.route_id, vehicle_id, bus.pattern_id)
+                trip = Trip(sighting.route_id, vehicle_id, bus.pattern_id, geometry.route_version, geometry)
                 furthest = 0.0
             assert trip is not None
 
@@ -314,7 +313,7 @@ def reconstruct_trips(
 #: Columns of `trip_pings_rows`, in order.
 TRIP_PING_COLUMNS = [
     "trip_key", "t", "dist_ft", "raw_dist_ft", "offset_ft", "is_repeat",
-    "latitude", "longitude", "route_id", "pattern_id", "vehicle_id", "operator_id",
+    "latitude", "longitude", "route_id", "route_version", "pattern_id", "vehicle_id", "operator_id",
     "run", "block_id", "trip_id", "scheduled_trip_id", "service_date", "trip_start_seconds",
 ]
 
@@ -335,6 +334,7 @@ def trip_pings_rows(trips: Iterable[Trip]) -> list[dict[str, Any]]:
                 "latitude": ping.bus.latitude,
                 "longitude": ping.bus.longitude,
                 "route_id": trip.route_id,
+                "route_version": trip.route_version,
                 "pattern_id": trip.pattern_id,
                 "vehicle_id": trip.vehicle_id,
                 "operator_id": ping.bus.operator_id,

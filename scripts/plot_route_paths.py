@@ -5,7 +5,8 @@ import argparse
 from datetime import timedelta
 from pathlib import Path
 
-from aaata_bus import DATA_PATH, get_routes
+from aaata_bus import DATA_PATH
+from aaata_bus.route_history import ROUTE_VERSIONS_FILE, load_route_history
 from aaata_bus.geometry import DEFAULT_MAX_OFFSET_FT
 from aaata_bus.visualization import load_route_data, plot_route_paths, trace_bus_paths
 from aaata_bus.visualization.data import DEFAULT_MAX_GAP, DEFAULT_ROUTE_DATA_FILE
@@ -45,7 +46,7 @@ def main():
     parser.add_argument(
         "--no-route-shapes",
         action="store_true",
-        help="Don't fetch and draw each route's scheduled path (works offline)",
+        help="Don't draw each route's scheduled path or snap pings to it",
     )
     parser.add_argument(
         "--no-stops",
@@ -68,6 +69,12 @@ def main():
         f"(default: {DEFAULT_MAX_OFFSET_FT:g})",
     )
     parser.add_argument(
+        "--route-versions",
+        type=Path,
+        default=ROUTE_VERSIONS_FILE,
+        help=f"Saved route versions from the collector (default: {ROUTE_VERSIONS_FILE})",
+    )
+    parser.add_argument(
         "--serve",
         nargs="?",
         type=int,
@@ -85,7 +92,15 @@ def main():
         snapshots = [s for s in snapshots if s.route_id in wanted]
     paths = trace_bus_paths(snapshots, max_gap=timedelta(minutes=args.max_gap_minutes))
 
-    routes = [] if args.no_route_shapes else get_routes(sorted({s.route_id for s in snapshots}))
+    history = None
+    routes = []
+    if not args.no_route_shapes:
+        # Each route is drawn as its latest saved version (or fetched live if it
+        # has none), and pings snap to the version in effect when they were seen.
+        route_ids = {s.route_id for s in snapshots}
+        history = load_route_history(route_ids, args.route_versions)
+        latest = (history.latest(route_id) for route_id in sorted(route_ids))
+        routes = [version.route for version in latest if version is not None]
 
     plot_route_paths(
         paths,
@@ -94,6 +109,7 @@ def main():
         show_stops=not args.no_stops,
         ping_view=args.pings,
         max_offset_ft=args.max_offset_ft,
+        geometries=history,
     ).save(args.output)
     print(f"Wrote {len(paths)} paths to {args.output}")
 
